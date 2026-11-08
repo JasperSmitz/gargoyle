@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { LibraryIssue } from '../../lib/api/types';
-  import { breakPoints } from '../../lib/format';
   import { displayPath, morePaths } from '../../lib/library';
   import SeverityChip from './SeverityChip.svelte';
 
   // Issues of one album (or of the whole library). Messages and paths come from the report and
   // are rendered as text only: plain interpolations, which Svelte escapes (csp.test.ts checks).
+  // Paths are one text node each, wrapped by `overflow-wrap: anywhere`, without <wbr> break
+  // points: a report can hold 25,000 paths, and per-separator elements multiplied into millions.
   let {
     issues,
     albumId = null,
@@ -30,7 +31,7 @@
           {#each issue.paths as path, j (j)}
             {@const shown = displayPath(path, albumId)}
             <li title={shown === path ? undefined : path}>
-              {#each breakPoints(shown) as part, k (k)}{#if k > 0}<wbr />{/if}{part}{/each}
+              {shown}
             </li>
           {/each}
           {#if more}<li class="more">{more}</li>{/if}

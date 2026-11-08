@@ -124,8 +124,8 @@ export const MAX_BREAK_PARTS = 64;
  * of mid-word. Joining the parts gives back the input exactly.
  *
  * At most `MAX_BREAK_PARTS` parts: the rest of the text is the last part, one text node that
- * still wraps through `overflow-wrap: anywhere`. Report paths are data, and a path of a million
- * slashes must not become a million elements.
+ * still wraps through `overflow-wrap: anywhere`, so a long target cannot become thousands of
+ * elements. (Liner report paths do not use this at all: there are too many of them per page.)
  */
 export function breakPoints(text: string): string[] {
   const parts: string[] = [];
