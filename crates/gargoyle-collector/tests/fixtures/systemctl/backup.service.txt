@@ -1,0 +1,14 @@
+Id=backup.service
+Names=backup.service
+Description=Nightly database backup
+LoadState=loaded
+ActiveState=failed
+SubState=failed
+ActiveEnterTimestamp=@1794050000
+InvocationID=9f1c2e3d4b5a69788796a5b4c3d2e1f0
+Result=exit-code
+NRestarts=3
+ExecMainStartTimestamp=@1794053600
+ExecMainExitTimestamp=@1794053612
+ExecMainStatus=2
+MemoryCurrent=[not set]

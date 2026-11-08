@@ -1,0 +1,14 @@
+Id=shadow.service
+Names=shadow.service
+Description=Verify integrity of password and group files
+LoadState=loaded
+ActiveState=inactive
+SubState=dead
+ActiveEnterTimestamp=@1794092408
+InvocationID=056d07eab9084acb9cc6abd7908d1148
+Result=success
+NRestarts=0
+ExecMainStartTimestamp=@1794092408
+ExecMainExitTimestamp=@1794092408
+ExecMainStatus=0
+MemoryCurrent=[not set]

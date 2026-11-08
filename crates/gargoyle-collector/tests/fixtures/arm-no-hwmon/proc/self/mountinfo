@@ -1,0 +1,5 @@
+21 1 179:2 / / rw,noatime shared:1 - ext4 /dev/mmcblk0p2 rw
+22 21 0:5 / /dev rw,relatime shared:2 - devtmpfs devtmpfs rw,size=1800000k,nr_inodes=450000,mode=755
+23 21 0:20 / /proc rw,relatime shared:12 - proc proc rw
+24 21 0:21 / /sys rw,nosuid,nodev,noexec,relatime shared:7 - sysfs sysfs rw
+30 21 179:1 / /boot/firmware rw,relatime shared:30 - vfat /dev/mmcblk0p1 rw,fmask=0022,dmask=0022

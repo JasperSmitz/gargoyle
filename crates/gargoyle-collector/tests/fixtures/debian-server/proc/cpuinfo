@@ -1,0 +1,60 @@
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 158
+model name	: Intel(R) Core(TM) i5-8500T CPU @ 2.10GHz
+stepping	: 10
+cpu MHz		: 800.012
+cache size	: 9216 KB
+physical id	: 0
+siblings	: 4
+core id		: 0
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov
+bogomips	: 4199.88
+
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 158
+model name	: Intel(R) Core(TM) i5-8500T CPU @ 2.10GHz
+stepping	: 10
+cpu MHz		: 800.012
+cache size	: 9216 KB
+physical id	: 0
+siblings	: 4
+core id		: 1
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov
+bogomips	: 4199.88
+
+processor	: 2
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 158
+model name	: Intel(R) Core(TM) i5-8500T CPU @ 2.10GHz
+stepping	: 10
+cpu MHz		: 800.012
+cache size	: 9216 KB
+physical id	: 0
+siblings	: 4
+core id		: 2
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov
+bogomips	: 4199.88
+
+processor	: 3
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 158
+model name	: Intel(R) Core(TM) i5-8500T CPU @ 2.10GHz
+stepping	: 10
+cpu MHz		: 800.012
+cache size	: 9216 KB
+physical id	: 0
+siblings	: 4
+core id		: 3
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov
+bogomips	: 4199.88
+

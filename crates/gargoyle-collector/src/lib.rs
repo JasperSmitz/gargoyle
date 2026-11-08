@@ -4,8 +4,10 @@
 //! else: no rates, no health, no storage. The data types live in [`gargoyle_core::model`] so pure
 //! code can use them without this crate; they are re-exported here for convenience.
 
+pub mod linux;
 mod mock;
 
+pub use linux::LinuxCollector;
 pub use mock::MockCollector;
 
 pub use gargoyle_core::model::{

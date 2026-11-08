@@ -1,0 +1,14 @@
+Id=music-sync-job.service
+Names=music-sync-job.service
+Description=Music library sync job
+LoadState=loaded
+ActiveState=inactive
+SubState=dead
+ActiveEnterTimestamp=@1794106800
+InvocationID=1b2c3d4e5f60718293a4b5c6d7e8f90a
+Result=success
+NRestarts=0
+ExecMainStartTimestamp=@1794106800
+ExecMainExitTimestamp=@1794107123
+ExecMainStatus=0
+MemoryCurrent=[not set]

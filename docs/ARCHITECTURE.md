@@ -148,7 +148,7 @@ pub struct UnitSnapshot {              // whitelisted systemd properties only, s
   - `/proc/stat` for CPU.
   - `/proc/meminfo` for memory, using `MemAvailable`.
   - `/proc/loadavg` and `/proc/uptime`.
-  - `/proc/self/mounts` plus `statvfs` for disks. These are the configured mounts, or auto-detected
+  - `/proc/self/mountinfo` plus `statvfs` for disks. These are the configured mounts, or auto-detected
     real filesystems: tmpfs, overlay, squashfs and other pseudo filesystems are excluded.
   - `/proc/net/dev` for network. Uses the configured interfaces, or all except `lo`, `veth*`,
     `docker*` and `br-*`.

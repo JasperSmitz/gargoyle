@@ -1,0 +1,14 @@
+Id=nonexistent.service
+Names=nonexistent.service
+Description=nonexistent.service
+LoadState=not-found
+ActiveState=inactive
+SubState=dead
+ActiveEnterTimestamp=
+InvocationID=
+Result=success
+NRestarts=0
+ExecMainStartTimestamp=
+ExecMainExitTimestamp=
+ExecMainStatus=0
+MemoryCurrent=[not set]
