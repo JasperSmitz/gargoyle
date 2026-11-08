@@ -26,8 +26,12 @@ pub struct Shared {
     pub config: Arc<Config>,
     pub collector: Arc<dyn Collector>,
     pub state: Arc<RwLock<State>>,
+    /// Host info has its own flag, so a hung host-info read never costs a system sample.
+    host_busy: Busy,
     system_busy: Busy,
     units_busy: Busy,
+    /// Host info is retried every system tick until it works; only the first failure is a warning.
+    host_info_warned: Arc<AtomicBool>,
 }
 
 impl Shared {
@@ -37,8 +41,10 @@ impl Shared {
             config: Arc::new(config),
             collector,
             state: Arc::new(RwLock::new(state)),
+            host_busy: Busy::default(),
             system_busy: Busy::default(),
             units_busy: Busy::default(),
+            host_info_warned: Arc::default(),
         }
     }
 
@@ -81,14 +87,18 @@ where
 }
 
 /// One system sample. Host info is collected on the first tick, and retried on later ticks until
-/// it succeeds; after that only uptime changes, and that comes from the system sample.
+/// it succeeds; after that only uptime changes, and that comes from the system sample. A failed
+/// host-info read does not stop the sample.
 pub async fn system_tick(shared: Shared) {
     let limit = call_limit(shared.config.collector.system_interval);
     if !shared.read(State::has_host_info) {
         let collector = shared.collector.clone();
-        match call(&shared.system_busy, limit, move || collector.host_info()).await {
+        match call(&shared.host_busy, limit, move || collector.host_info()).await {
             Ok(info) => shared.write(|s| s.record_host_info(info)),
-            Err(e) => tracing::warn!(error = %e, "cannot read host info"),
+            Err(e) if !shared.host_info_warned.swap(true, Ordering::Relaxed) => {
+                tracing::warn!(error = %e, "cannot read host info; will keep retrying quietly");
+            }
+            Err(e) => tracing::debug!(error = %e, "cannot read host info"),
         }
     }
 
@@ -152,8 +162,9 @@ impl Drop for ClearOnDrop {
 
 #[derive(Debug)]
 enum CallError {
-    /// The previous call of this kind has not returned yet; this tick was skipped.
-    Busy,
+    /// The previous call of this kind has not returned yet, so this tick was skipped. That call
+    /// was given up on after the carried limit (calls of one kind are otherwise sequential).
+    Busy(Duration),
     TimedOut(Duration),
     Panicked,
     Collect(CollectError),
@@ -162,7 +173,9 @@ enum CallError {
 impl fmt::Display for CallError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CallError::Busy => f.write_str("previous collection is still running"),
+            CallError::Busy(d) => {
+                write!(f, "still running (timed out after {}s)", d.as_secs())
+            }
             CallError::TimedOut(d) => write!(f, "timed out after {}s", d.as_secs()),
             CallError::Panicked => f.write_str("collector crashed"),
             CallError::Collect(e) => e.fmt(f),
@@ -179,7 +192,7 @@ where
     T: Send + 'static,
 {
     if busy.0.swap(true, Ordering::AcqRel) {
-        return Err(CallError::Busy);
+        return Err(CallError::Busy(limit));
     }
     let guard = ClearOnDrop(busy.0.clone());
     let task = tokio::task::spawn_blocking(move || {
@@ -286,6 +299,32 @@ mod tests {
         }
     }
 
+    /// Host info always fails; system snapshots come from the mock.
+    struct NoHostInfo(MockCollector);
+
+    impl Collector for NoHostInfo {
+        fn host_info(&self) -> Result<HostInfo, CollectError> {
+            Err(err())
+        }
+        fn system_snapshot(&self) -> Result<SystemSnapshot, CollectError> {
+            self.0.system_snapshot()
+        }
+        fn units(&self, u: &[UnitRequest]) -> Result<Vec<UnitSnapshot>, CollectError> {
+            self.0.units(u)
+        }
+    }
+
+    #[tokio::test]
+    async fn host_info_failure_does_not_stop_the_sample() {
+        let shared = Shared::new(config(), Arc::new(NoHostInfo(MockCollector::new(1))));
+        system_tick(shared.clone()).await;
+        system_tick(shared.clone()).await;
+        let o = shared.read(|s| s.overview(&shared.config, now()));
+        assert_eq!(o.host, "unknown");
+        assert_eq!(o.system.disks.len(), 2);
+        assert!(shared.host_info_warned.load(Ordering::Relaxed));
+    }
+
     #[test]
     fn call_limit_is_interval_capped_at_20s() {
         assert_eq!(call_limit(Duration::from_secs(10)), Duration::from_secs(10));
@@ -317,7 +356,7 @@ mod tests {
         assert_eq!(hanging.calls.load(Ordering::SeqCst), 1);
         assert_eq!(
             message(&shared).as_deref(),
-            Some("collection failed: previous collection is still running")
+            Some("collection failed: still running (timed out after 1s)")
         );
 
         hanging.released.store(true, Ordering::SeqCst);

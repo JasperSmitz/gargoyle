@@ -221,7 +221,7 @@ impl State {
     fn system_view(&self, config: &Config, now: i64) -> SystemSummary {
         let s = &self.system;
         let Some(snap) = &s.last else {
-            return empty_system(now);
+            return empty_system();
         };
         let h: SystemHealth = evaluate_system(
             &config.thresholds,
@@ -230,9 +230,16 @@ impl State {
             s.cpu_window.mean(),
             s.load_window.mean(),
         );
-        let overall = if is_stale(s.last_ok, now, config.collector.system_interval) {
-            // The values below are kept so the UI can still show them, marked unknown.
-            Health::Unknown
+        // Stale data keeps its values, so the UI can still show them, but every metric judged
+        // from it is unknown (§8). Missing configured disks stay critical: they are reported
+        // whether or not samples arrive.
+        let stale = is_stale(s.last_ok, now, config.collector.system_interval);
+        let judged = |health: Health| if stale { Health::Unknown } else { health };
+        let overall = if stale {
+            health::worst(
+                std::iter::once(Health::Unknown)
+                    .chain(h.missing_disks.iter().map(|(_, a)| a.health)),
+            )
         } else {
             h.overall().health
         };
@@ -243,13 +250,13 @@ impl State {
             cpu: CpuSummary {
                 usage: round(s.cpu.map_or(0.0, |c| c.usage), 1),
                 iowait: round(s.cpu.map_or(0.0, |c| c.iowait), 1),
-                health: h.cpu.health,
+                health: judged(h.cpu.health),
             },
             load: LoadSummary {
                 one: round(snap.load[0], 2),
                 five: round(snap.load[1], 2),
                 fifteen: round(snap.load[2], 2),
-                health: h.load.health,
+                health: judged(h.load.health),
             },
             memory: MemorySummary {
                 total: mem.total,
@@ -257,7 +264,7 @@ impl State {
                 used_pct: round(memory_used_pct(mem).unwrap_or(0.0), 1),
                 swap_total: mem.swap_total,
                 swap_used: mem.swap_total.saturating_sub(mem.swap_free),
-                health: h.memory_card(),
+                health: judged(h.memory_card()),
             },
             disks: snap
                 .disks
@@ -269,7 +276,7 @@ impl State {
                     total: d.total,
                     used: d.used,
                     used_pct: round(disk_used_pct(d).unwrap_or(0.0), 1),
-                    health: a.health,
+                    health: judged(a.health),
                 })
                 // A configured disk that is not mounted still gets a (zeroed, critical) row, so
                 // it cannot silently disappear from the dashboard.
@@ -298,18 +305,19 @@ impl State {
                 .map(|(t, a)| TempSummary {
                     label: t.label.clone(),
                     celsius: t.celsius,
-                    health: a.health,
+                    health: judged(a.health),
                 })
                 .collect(),
         }
     }
 }
 
-/// The system before the first successful sample: all zeros, unknown.
-fn empty_system(now: i64) -> SystemSummary {
+/// The system before the first successful sample: all zeros, unknown. `ts` is 0 rather than now,
+/// so nothing mistakes the placeholder for a fresh sample.
+fn empty_system() -> SystemSummary {
     SystemSummary {
         health: Health::Unknown,
-        ts: now,
+        ts: 0,
         cpu: CpuSummary {
             usage: 0.0,
             iowait: 0.0,
@@ -410,6 +418,7 @@ mod tests {
         let o = state.overview(&config, T0);
         assert_eq!(o.host, "unknown");
         assert_eq!(o.system.health, Health::Unknown);
+        assert_eq!(o.system.ts, 0);
         assert_eq!(o.health, Health::Unknown);
         assert_eq!(o.services.len(), 3);
         for s in &o.services {
@@ -471,10 +480,26 @@ mod tests {
     fn stale_targets_become_unknown() {
         let (config, state) = populated(12);
         // system interval 10s, units 30s: 3× is 30s and 90s.
+        let fresh = state.overview(&config, T0 + 30);
+        assert_ne!(fresh.system.health, Health::Unknown);
+        assert_ne!(fresh.system.cpu.health, Health::Unknown);
+
         let o = state.overview(&config, T0 + 31);
-        assert_eq!(o.system.health, Health::Unknown);
+        let sys = &o.system;
+        assert_eq!(sys.health, Health::Unknown);
+        assert_eq!(sys.cpu.health, Health::Unknown);
+        assert_eq!(sys.load.health, Health::Unknown);
+        assert_eq!(sys.memory.health, Health::Unknown);
+        assert!(sys.disks.iter().all(|d| d.health == Health::Unknown));
+        assert!(sys.temps.iter().all(|t| t.health == Health::Unknown));
         // The last values stay visible.
-        assert_eq!(o.system.disks.len(), 2);
+        assert_eq!(sys.ts, fresh.system.ts);
+        assert_eq!(sys.disks, {
+            let mut d = fresh.system.disks.clone();
+            d.iter_mut().for_each(|d| d.health = Health::Unknown);
+            d
+        });
+        assert_eq!(sys.memory.used, fresh.system.memory.used);
         assert!(o.services.iter().all(|s| s.health != Health::Unknown));
 
         let o = state.overview(&config, T0 + 91);
@@ -570,5 +595,23 @@ mod tests {
         assert_eq!(o.system.health, Health::Critical);
         // "/srv" is mounted but not configured: still shown, as the collector reported it.
         assert_eq!(o.system.disks.len(), 3);
+
+        // Stale: the mounted disks become unknown, the missing one stays critical.
+        let o = state.overview(&config, T0 + 3600);
+        let healths: Vec<_> = o
+            .system
+            .disks
+            .iter()
+            .map(|d| (d.mount.as_str(), d.health))
+            .collect();
+        assert_eq!(
+            healths,
+            [
+                ("/", Health::Unknown),
+                ("/srv", Health::Unknown),
+                ("/backup", Health::Critical)
+            ]
+        );
+        assert_eq!(o.system.health, Health::Critical);
     }
 }
