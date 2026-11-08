@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { CheckSummary } from '../../lib/api/types';
   import { CHECK_KIND_LABEL, formatLatency } from '../../lib/checks';
-  import { breakPoints, formatRelativeTime, formatTimestamp } from '../../lib/format';
+  import { breakPoints, formatRelativeTime } from '../../lib/format';
   import { needsAttention, sortBySeverity } from '../../lib/health';
   import { href } from '../../lib/router';
   import DataTable from '../DataTable.svelte';
   import HealthBadge from '../HealthBadge.svelte';
+  import Time from '../Time.svelte';
 
   // The overview's HTTP/TCP checks, laid out like the timers table. `target` arrives sanitized
   // (no userinfo or query, ARCHITECTURE §6) and is shown as-is.
@@ -47,9 +48,12 @@
       </td>
       <td data-label="Last check">
         {#if check.lastCheck !== null}
-          <span title={formatTimestamp(check.lastCheck)}>
-            {formatRelativeTime(check.lastCheck, serverNow)}
-          </span>
+          <span
+            ><Time
+              ts={check.lastCheck}
+              text={formatRelativeTime(check.lastCheck, serverNow)}
+            /></span
+          >
         {:else}
           <span class="never">Never</span>
         {/if}

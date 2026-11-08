@@ -3,6 +3,7 @@
   import ChartGroupPanel from '../components/charts/ChartGroupPanel.svelte';
   import RangePicker from '../components/charts/RangePicker.svelte';
   import EmptyState from '../components/EmptyState.svelte';
+  import ChartsSkeleton from '../components/skeleton/ChartsSkeleton.svelte';
   import type { ApiClient } from '../lib/api/client';
   import { buildChartGroups } from '../lib/charts/groups';
   import type { Range } from '../lib/charts/range';
@@ -60,7 +61,8 @@
       <button type="button" class="retry" onclick={() => catalog.refresh()}>Try again</button>
     </EmptyState>
   {:else}
-    <p class="loading" role="status">Loading metrics…</p>
+    <!-- CPU, load, memory, disk, network, temperatures: the usual set on a server. -->
+    <ChartsSkeleton count={6} label="Loading metrics" />
   {/if}
 </div>
 
@@ -85,10 +87,6 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 28rem), 1fr));
     gap: var(--space-3);
-  }
-
-  .loading {
-    color: var(--color-text-faint);
   }
 
   .retry {

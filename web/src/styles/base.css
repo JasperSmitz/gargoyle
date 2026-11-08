@@ -60,11 +60,41 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
   *,
   *::before,
   *::after {
     transition-duration: 0s !important;
     animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* Printing a page is a snapshot: light ink on paper, no controls or sticky chrome. */
+@media print {
+  :root {
+    color-scheme: light;
+  }
+
+  header {
+    position: static !important;
+  }
+
+  button,
+  nav[aria-label='Main'],
+  nav[aria-label='Time range'],
+  a[href='#main'] {
+    display: none !important;
+  }
+
+  section,
+  figure,
+  li,
+  tr {
+    break-inside: avoid;
   }
 }
 

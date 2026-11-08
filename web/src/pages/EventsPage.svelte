@@ -3,6 +3,7 @@
   import CardList from '../components/CardList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import EventItem from '../components/events/EventItem.svelte';
+  import ListSkeleton from '../components/skeleton/ListSkeleton.svelte';
   import type { ApiClient } from '../lib/api/client';
   import { TARGET_KINDS, type Overview, type TargetKind } from '../lib/api/types';
   import { targetOptions, type EventFilters } from '../lib/event-filters';
@@ -94,7 +95,11 @@
     <form class="filters" aria-label="Filter events" onsubmit={(e) => e.preventDefault()}>
       <label>
         <span>Kind</span>
-        <select value={filters.kind ?? ''} onchange={(e) => onKind(e.currentTarget.value)}>
+        <select
+          name="kind"
+          value={filters.kind ?? ''}
+          onchange={(e) => onKind(e.currentTarget.value)}
+        >
           <option value="">All kinds</option>
           {#each TARGET_KINDS as kind (kind)}
             <option value={kind}>{KIND_LABELS[kind]}</option>
@@ -104,6 +109,7 @@
       <label>
         <span>Target</span>
         <select
+          name="target"
           value={filters.target ?? ''}
           onchange={(e) => navigate({ kind: filters.kind, target: e.currentTarget.value || null })}
         >
@@ -161,7 +167,7 @@
       <button type="button" class="retry" onclick={() => feed.refresh()}>Try again</button>
     </EmptyState>
   {:else}
-    <p class="loading" role="status">Loading events…</p>
+    <ListSkeleton rows={8} label="Loading events" />
   {/if}
 </div>
 
@@ -239,8 +245,7 @@
     cursor: progress;
   }
 
-  .end,
-  .loading {
+  .end {
     font-size: var(--text-sm);
     color: var(--color-text-faint);
   }

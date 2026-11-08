@@ -39,7 +39,18 @@ async function renderPage(
   metricsQuery: ApiClient['metricsQuery'] = async (q) => memoryResponse(q.keys[0] ?? ''),
   unit = 'minecraft.service',
 ) {
-  const client = { service: vi.fn(detail), metricsQuery: vi.fn(metricsQuery) };
+  // Every key the page charts is listed, unless a test says otherwise.
+  const listed = [`service.memory:${unit}`, `service.restarts:${unit}`];
+  const metrics = vi.fn(async () => ({
+    host: 'debian-box',
+    series: listed.map((key) => ({
+      key,
+      metric: key.split(':')[0] ?? key,
+      label: null,
+      unit: 'ms' as const,
+    })),
+  }));
+  const client = { service: vi.fn(detail), metricsQuery: vi.fn(metricsQuery), metrics };
   render(ServicePage, {
     unit,
     range: rangeById('24h'),

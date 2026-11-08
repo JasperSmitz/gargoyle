@@ -1,6 +1,7 @@
 <script lang="ts">
+  import Time from './Time.svelte';
   import type { Health } from '../lib/api/types';
-  import { formatRelativeTime, formatTimestamp } from '../lib/format';
+  import { formatRelativeTime } from '../lib/format';
   import { href, type RouteName } from '../lib/router';
   import GargoyleMark from './GargoyleMark.svelte';
   import HealthBadge from './HealthBadge.svelte';
@@ -47,8 +48,10 @@
     </nav>
     <div class="status">
       {#if receivedAt !== null}
-        <span class="updated" class:stale title="Last updated {formatTimestamp(receivedAt)}">
-          Updated <span class="ago">{formatRelativeTime(receivedAt, now)}</span>
+        <span class="updated" class:stale>
+          Updated <span class="ago"
+            ><Time ts={receivedAt} text={formatRelativeTime(receivedAt, now)} /></span
+          >
         </span>
       {/if}
       {#if health}<HealthBadge {health} size="sm" context="Overall health" />{/if}
@@ -134,6 +137,22 @@
     align-items: center;
     gap: var(--space-3);
     margin-left: auto;
+  }
+
+  /*
+   * Narrow screens: brand and host, then the nav, then the status on fixed rows. The status row
+   * keeps its height before the first response, so the page does not shift when it arrives.
+   */
+  @media (max-width: 48rem) {
+    .nav {
+      flex-basis: 100%;
+    }
+
+    .status {
+      flex-basis: 100%;
+      justify-content: flex-end;
+      min-height: 1.5rem;
+    }
   }
 
   .updated {

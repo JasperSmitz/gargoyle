@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { HealthEvent } from '../../lib/api/types';
-  import { formatRelativeTime, formatTimestamp } from '../../lib/format';
+  import { formatRelativeTime } from '../../lib/format';
+  import Time from '../Time.svelte';
   import { targetHref } from '../../lib/router';
   import HealthLabel from '../HealthLabel.svelte';
 
@@ -20,9 +21,7 @@
 </script>
 
 <li class="event">
-  <time datetime={new Date(event.ts * 1000).toISOString()} title={formatTimestamp(event.ts)}>
-    {formatRelativeTime(event.ts, serverNow)}
-  </time>
+  <span class="when"><Time ts={event.ts} text={formatRelativeTime(event.ts, serverNow)} /></span>
   <div class="body">
     <div class="line">
       {#if showTarget}
@@ -54,7 +53,7 @@
     border-bottom: none;
   }
 
-  time {
+  .when {
     color: var(--color-text-faint);
     font-variant-numeric: tabular-nums;
   }

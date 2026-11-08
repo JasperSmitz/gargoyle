@@ -74,7 +74,7 @@ export function describeFeedError(error: unknown): { title: string; detail: stri
   if (error instanceof ApiRequestError) {
     if (error.status === 0) return { title: 'Server unreachable', detail: error.message };
     if (error.status === 401) {
-      return { title: 'Not signed in', detail: 'Reload the page to enter credentials.' };
+      return { title: 'Authentication required', detail: 'Reload to sign in' };
     }
     return { title: 'Server error', detail: `${error.message} (HTTP ${error.status})` };
   }

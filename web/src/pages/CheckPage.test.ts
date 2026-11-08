@@ -44,7 +44,18 @@ async function renderPage(
   metricsQuery: ApiClient['metricsQuery'] = async (q) => latencyResponse(q.keys[0] ?? ''),
   name = 'Game port',
 ) {
-  const client = { check: vi.fn(detail), metricsQuery: vi.fn(metricsQuery) };
+  // Every key the page charts is listed, unless a test says otherwise.
+  const listed = [`check.latency:${name}`];
+  const metrics = vi.fn(async () => ({
+    host: 'debian-box',
+    series: listed.map((key) => ({
+      key,
+      metric: key.split(':')[0] ?? key,
+      label: null,
+      unit: 'ms' as const,
+    })),
+  }));
+  const client = { check: vi.fn(detail), metricsQuery: vi.fn(metricsQuery), metrics };
   render(CheckPage, { name, range: rangeById('24h'), client, visibility: visible, serverNow: NOW });
   await vi.advanceTimersByTimeAsync(0);
   return client;
@@ -130,6 +141,29 @@ describe('CheckPage', () => {
     const history = screen.getByRole('region', { name: 'History' });
     expect(within(history).getByText('No data in this range')).toBeTruthy();
     expect(within(history).queryByRole('alert')).toBeNull();
+  });
+
+  it('does not query a latency series the backend has not listed yet', async () => {
+    const metricsQuery = vi.fn(async (q: Parameters<ApiClient['metricsQuery']>[0]) =>
+      latencyResponse(q.keys[0] ?? ''),
+    );
+    const client = {
+      check: vi.fn(async () => failing),
+      metricsQuery,
+      metrics: vi.fn(async () => ({ host: 'debian-box', series: [] })),
+    };
+    render(CheckPage, {
+      name: 'Game port',
+      range: rangeById('24h'),
+      client,
+      visibility: visible,
+      serverNow: NOW,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.metrics).toHaveBeenCalled();
+    expect(metricsQuery).not.toHaveBeenCalled();
+    const history = screen.getByRole('region', { name: 'History' });
+    expect(within(history).getByText('No data in this range')).toBeTruthy();
   });
 
   it('lists the check events and links to the filtered log', async () => {

@@ -15,6 +15,7 @@
   import { readChartTheme, watchColorScheme } from '../../lib/charts/theme';
   import { formatChartTime } from '../../lib/charts/time';
   import { formatValue } from '../../lib/charts/units';
+  import SkeletonBlock from '../skeleton/SkeletonBlock.svelte';
 
   let {
     title,
@@ -205,7 +206,9 @@
     {:else if error}
       <p class="state error" role="alert">Could not load: {error}</p>
     {:else}
-      <p class="state" role="status">Loading…</p>
+      <div class="loading" role="status" aria-label="Loading {title}">
+        <SkeletonBlock height="100%" radius="var(--radius-md)" />
+      </div>
     {/if}
   </div>
 
@@ -324,9 +327,14 @@
     place-items: center;
     height: 100%;
     font-size: var(--text-sm);
-    color: var(--color-text-faint);
+    /* text-faint is below 4.5:1 on the sunken fill (tokens.css). */
+    color: var(--color-text-muted);
     background: var(--color-surface-sunken);
     border-radius: var(--radius-md);
+  }
+
+  .loading {
+    height: 100%;
   }
 
   .state.error {

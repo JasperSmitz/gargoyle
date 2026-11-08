@@ -1,9 +1,9 @@
 <script lang="ts">
+  import Time from '../components/Time.svelte';
   import { onMount, untrack } from 'svelte';
   import CardList from '../components/CardList.svelte';
   import ChartGroupPanel from '../components/charts/ChartGroupPanel.svelte';
   import RangePicker from '../components/charts/RangePicker.svelte';
-  import DetailHeader from '../components/detail/DetailHeader.svelte';
   import DetailState from '../components/detail/DetailState.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import EventItem from '../components/events/EventItem.svelte';
@@ -12,7 +12,7 @@
   import type { ServiceSummary } from '../lib/api/types';
   import type { Range } from '../lib/charts/range';
   import { DETAIL_POLL_MS, PolledFeed } from '../lib/feed.svelte';
-  import { formatBytes, formatDuration, formatTimestamp } from '../lib/format';
+  import { formatBytes, formatDuration } from '../lib/format';
   import type { Visibility } from '../lib/poller';
   import { hrefWithQuery } from '../lib/router';
   import { serviceChartGroups, treatUnknownKeyAsEmpty } from '../lib/service-charts';
@@ -27,7 +27,7 @@
   }: {
     unit: string;
     range: Range;
-    client: Pick<ApiClient, 'service' | 'metricsQuery'>;
+    client: Pick<ApiClient, 'service' | 'metricsQuery' | 'metrics'>;
     visibility?: Visibility;
     serverNow: number;
   } = $props();
@@ -64,56 +64,57 @@
     data={feed.data}
     error={feed.error}
     noun="service"
+    kind="Service"
+    charts={chartGroups.length}
     name={unit}
     onretry={() => feed.refresh()}
+    summary={({ service }) => ({
+      kind: 'Service',
+      name: service.name,
+      unit: service.unit,
+      health: service.health,
+      message: service.message,
+    })}
   >
-    {#snippet children({ service, events })}
-      <DetailHeader
-        kind="Service"
-        name={service.name}
-        unit={service.unit}
-        health={service.health}
-        message={service.message}
-      >
-        {#snippet facts()}
-          <div>
-            <dt>State</dt>
-            <dd>{service.activeState} ({service.subState})</dd>
-          </div>
-          <div>
-            <dt>{sinceLabel(service)}</dt>
-            <dd>
-              {#if service.since !== null}
-                {formatDuration(serverNow - service.since)}
-                <span class="sub">since {formatTimestamp(service.since)}</span>
-              {:else}
-                Unknown
-              {/if}
-            </dd>
-          </div>
-          <div>
-            <dt>Restarts</dt>
-            <dd>{service.restarts}</dd>
-          </div>
-          <div>
-            <dt>Memory</dt>
-            <dd>{service.memory !== null ? formatBytes(service.memory) : 'Not reported'}</dd>
-          </div>
-          {#if service.loadState !== 'loaded'}
-            <div>
-              <dt>Unit file</dt>
-              <dd>{service.loadState}</dd>
-            </div>
+    {#snippet facts({ service })}
+      <div>
+        <dt>State</dt>
+        <dd>{service.activeState} ({service.subState})</dd>
+      </div>
+      <div>
+        <dt>{sinceLabel(service)}</dt>
+        <dd>
+          {#if service.since !== null}
+            {formatDuration(serverNow - service.since)}
+            <span class="sub">since <Time ts={service.since} /></span>
+          {:else}
+            Unknown
           {/if}
-          {#if service.description}
-            <div class="wide">
-              <dt>Description</dt>
-              <dd>{service.description}</dd>
-            </div>
-          {/if}
-        {/snippet}
-      </DetailHeader>
+        </dd>
+      </div>
+      <div>
+        <dt>Restarts</dt>
+        <dd>{service.restarts}</dd>
+      </div>
+      <div>
+        <dt>Memory</dt>
+        <dd>{service.memory !== null ? formatBytes(service.memory) : 'Not reported'}</dd>
+      </div>
+      {#if service.loadState !== 'loaded'}
+        <div>
+          <dt>Unit file</dt>
+          <dd>{service.loadState}</dd>
+        </div>
+      {/if}
+      {#if service.description}
+        <div class="wide">
+          <dt>Description</dt>
+          <dd>{service.description}</dd>
+        </div>
+      {/if}
+    {/snippet}
 
+    {#snippet children({ service, events })}
       <section class="history" aria-label="History">
         <div class="toolbar">
           <h2 class="heading">History</h2>

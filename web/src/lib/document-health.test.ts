@@ -25,18 +25,36 @@ describe('documentTitle', () => {
     // Never "0 warnings" even if the counts disagree with the aggregate.
     ['warning', {}, '⚠ 1 warning · Gargoyle — debian-box'],
   ] as const)('%s with %o reads %s', (health, counts, title) => {
-    expect(documentTitle(overviewWith(health, counts), false)).toBe(title);
+    expect(documentTitle(overviewWith(health, counts), null)).toBe(title);
   });
 
   it('says offline instead of a possibly outdated health', () => {
-    expect(documentTitle(overviewWith('critical', { critical: 2 }), true)).toBe(
+    expect(documentTitle(overviewWith('critical', { critical: 2 }), 'offline')).toBe(
       'Offline · Gargoyle — debian-box',
     );
-    expect(documentTitle(null, true)).toBe('Offline · Gargoyle');
+    expect(documentTitle(null, 'offline')).toBe('Offline · Gargoyle');
+  });
+
+  it('says sign-in is needed on a 401, not offline', () => {
+    expect(documentTitle(overviewWith('critical', { critical: 2 }), 'unauthorized', 'System')).toBe(
+      'Sign-in needed · System · Gargoyle — debian-box',
+    );
+    expect(documentTitle(null, 'unauthorized')).toBe('Sign-in needed · Gargoyle');
   });
 
   it('is just the app name before the first response', () => {
-    expect(documentTitle(null, false)).toBe('Gargoyle');
+    expect(documentTitle(null, null)).toBe('Gargoyle');
+  });
+
+  it('names the page before the app on pages other than the overview', () => {
+    expect(documentTitle(overviewWith('healthy', {}), null, 'System')).toBe(
+      'System · Gargoyle — debian-box',
+    );
+    expect(documentTitle(overviewWith('warning', { warning: 2 }), null, 'nginx.service')).toBe(
+      '⚠ 2 warnings · nginx.service · Gargoyle — debian-box',
+    );
+    expect(documentTitle(null, null, 'Events')).toBe('Events · Gargoyle');
+    expect(documentTitle(null, 'offline', 'Events')).toBe('Offline · Events · Gargoyle');
   });
 });
 
