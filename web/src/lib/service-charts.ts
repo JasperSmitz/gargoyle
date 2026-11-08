@@ -6,7 +6,14 @@ import { ApiRequestError, type ApiClient } from './api/client';
 import type { MetricsQuery, SeriesUnit } from './api/types';
 import type { ChartGroup } from './charts/groups';
 
-function singleSeries(id: string, key: string, title: string, unit: SeriesUnit, label: string) {
+/** A group of one chart over one exact series key. */
+export function singleSeries(
+  id: string,
+  key: string,
+  title: string,
+  unit: SeriesUnit,
+  label: string,
+) {
   return {
     id,
     queryKeys: [key],

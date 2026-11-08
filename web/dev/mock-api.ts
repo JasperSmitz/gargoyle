@@ -7,7 +7,9 @@
 // works for every range. Timers, runs and events are generated too (mock-units.ts), so detail
 // pages, countdowns and event paging work. The overview is lightly animated (fresh timestamps,
 // wandering CPU and memory) so polling and "updated Xs ago" can be seen working.
-// `VITE_MOCK=offline` answers 503 everywhere instead, to see the offline banner.
+// Checks come from mock-checks.ts, one per health state.
+// `VITE_MOCK=offline` answers 503 everywhere instead, to see the offline banner, and
+// `VITE_MOCK=empty` serves a host with no services, timers or checks configured.
 
 import { fixtures } from '../src/lib/api/fixtures';
 import {
@@ -18,6 +20,7 @@ import {
   type ServiceSummary,
 } from '../src/lib/api/types';
 import { worst } from '../src/lib/health';
+import { check, checks } from './mock-checks';
 import { QueryError, query, seriesInfo } from './mock-metrics';
 import { events, timerDetail, timers } from './mock-units';
 
@@ -25,11 +28,10 @@ type Fixture = keyof typeof fixtures;
 
 const HOST = 'debian-box';
 
-const ROUTES: [RegExp, Fixture][] = [
-  [/^\/health$/, 'health.json'],
-  [/^\/checks$/, 'checks.json'],
-  [/^\/checks\/[^/]+$/, 'check-detail.json'],
-];
+const ROUTES: [RegExp, Fixture][] = [[/^\/health$/, 'health.json']];
+
+/** `normal` serves generated data, `offline` fails every call, `empty` has no targets configured. */
+export type MockMode = 'normal' | 'offline' | 'empty';
 
 export interface MockResponse {
   status: number;
@@ -40,16 +42,18 @@ export interface MockResponse {
 export function respond(
   path: string,
   params: URLSearchParams,
-  offline: boolean,
+  mode: MockMode = 'normal',
   now = Date.now() / 1000,
 ): MockResponse {
-  if (offline) {
+  if (mode === 'offline') {
     return {
       status: 503,
       body: { error: { code: 'unavailable', message: 'mock backend is offline' } },
     };
   }
-  if (path === '/overview') return { status: 200, body: liveOverview(now) };
+  if (path === '/overview') {
+    return { status: 200, body: mode === 'empty' ? emptyOverview(now) : liveOverview(now) };
+  }
   if (path === '/metrics') return { status: 200, body: { host: HOST, series: seriesInfo() } };
   if (path === '/metrics/query') {
     try {
@@ -59,7 +63,7 @@ export function respond(
       return { status: 400, body: { error: { code: error.code, message: error.message } } };
     }
   }
-  const units = unitsResponse(path, params, now);
+  const units = unitsResponse(path, params, now) ?? checksResponse(path, now);
   if (units) return units;
   const match = ROUTES.find(([pattern]) => pattern.test(path));
   if (match) return { status: 200, body: fixtures[match[1]] };
@@ -103,6 +107,19 @@ function unitsResponse(path: string, params: URLSearchParams, now: number): Mock
   return { status: 200, body: { host: HOST, ...detail, events: unitEvents } };
 }
 
+/** `/checks` and `/checks/{name}`, or null for other paths. */
+function checksResponse(path: string, now: number): MockResponse | null {
+  const t = Math.floor(now);
+  if (path === '/checks') return { status: 200, body: { host: HOST, checks: checks(t) } };
+  const [, encoded] = /^\/checks\/([^/]+)$/.exec(path) ?? [];
+  if (!encoded) return null;
+  const name = decodeURIComponent(encoded);
+  const summary = check(name, t);
+  if (!summary) return notFound('check');
+  const checkEvents = events(t, liveServices(t), { target: name, kind: 'check', limit: 20 });
+  return { status: 200, body: { host: HOST, check: summary, events: checkEvents } };
+}
+
 function intParam(params: URLSearchParams, name: string): number | undefined {
   const value = params.get(name);
   return value !== null && /^\d+$/.test(value) ? Number(value) : undefined;
@@ -120,7 +137,6 @@ function liveServices(now: number): ServiceSummary[] {
 function liveOverview(at: number): Overview {
   const overview = structuredClone(fixtures['overview.json']);
   const now = Math.floor(at);
-  const shift = now - overview.ts;
   const wave = Math.sin(now / 40);
 
   overview.ts = now;
@@ -139,7 +155,7 @@ function liveOverview(at: number): Overview {
 
   // Keep relative times ("2h ago") as they read in the example.
   overview.services = liveServices(now);
-  for (const c of overview.checks) if (c.lastCheck !== null) c.lastCheck += shift;
+  overview.checks = checks(now);
   overview.timers = timers(now);
   overview.recentEvents = events(now, overview.services, { limit: 10 });
 
@@ -152,6 +168,25 @@ function liveOverview(at: number): Overview {
   for (const health of targets) counts[health] += 1;
   overview.counts = counts;
   overview.health = worst(targets);
+  return overview;
+}
+
+/** A fresh install: only the system is watched, all is well, and nothing has happened yet. */
+function emptyOverview(at: number): Overview {
+  const overview = liveOverview(at);
+  for (const disk of overview.system.disks) {
+    disk.used = Math.round(disk.total * 0.3);
+    disk.usedPct = 30;
+    disk.health = 'healthy';
+  }
+  overview.system.health = 'healthy';
+  overview.services = [];
+  overview.timers = [];
+  overview.checks = [];
+  overview.recentEvents = [];
+  overview.health = overview.system.health;
+  overview.counts = { healthy: 0, warning: 0, critical: 0, unknown: 0 };
+  overview.counts[overview.system.health] = 1;
   return overview;
 }
 

@@ -4,7 +4,7 @@ import { respond } from './mock-api';
 const NOW = 1_794_200_000;
 
 function get(path: string, query: string) {
-  return respond(path, new URLSearchParams(query), false, NOW);
+  return respond(path, new URLSearchParams(query), 'normal', NOW);
 }
 
 describe('mock /metrics/query', () => {

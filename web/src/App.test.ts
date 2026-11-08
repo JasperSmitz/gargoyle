@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
 import { ApiRequestError, type ApiClient } from './lib/api/client';
 import { fixtures } from './lib/api/fixtures';
+import { faviconHref } from './lib/document-health';
 import type { Overview } from './lib/api/types';
 import type { Visibility } from './lib/poller';
 import { installResizeObserver } from './test/fake-uplot';
@@ -22,6 +23,7 @@ function clientWith(overview: (opts?: { signal?: AbortSignal }) => Promise<Overv
     }),
     service: vi.fn(async () => fixtures['service-detail.json']),
     timer: vi.fn(async () => fixtures['timer-detail.json']),
+    check: vi.fn(async () => fixtures['check-detail.json']),
     events: vi.fn(async () => fixtures['events.json']),
   };
 }
@@ -154,6 +156,40 @@ describe('App', () => {
     expect(client.service).toHaveBeenCalledWith('minecraft.service', expect.anything());
     expect(screen.getByRole('heading', { level: 1, name: 'Minecraft' })).toBeTruthy();
     expect(screen.getByRole('link', { name: '7d' }).getAttribute('aria-current')).toBe('true');
+  });
+
+  it('routes #/checks/:name to the check page', async () => {
+    location.hash = '#/checks/Game%20port?range=7d';
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.check).toHaveBeenCalledWith('Game port', expect.anything());
+    expect(screen.getByRole('heading', { level: 1, name: 'Game port' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '7d' }).getAttribute('aria-current')).toBe('true');
+  });
+
+  it('mirrors overall health in the document title and favicon, on every page', async () => {
+    location.hash = '#/system';
+    const icon = () => document.querySelector('link[rel="icon"]')?.getAttribute('href');
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    expect(document.title).toBe('Gargoyle');
+    await vi.advanceTimersByTimeAsync(0);
+    // The example overview is critical with two critical targets.
+    expect(document.title).toBe('✖ 2 critical · Gargoyle — debian-box');
+    expect(icon()).toBe(faviconHref('critical'));
+
+    const healthy = structuredClone(fixtures['overview.json']);
+    healthy.health = 'healthy';
+    client.overview.mockResolvedValue(healthy);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(document.title).toBe('Gargoyle — debian-box');
+    expect(icon()).toBe(faviconHref('healthy'));
+
+    client.overview.mockRejectedValue(new ApiRequestError('network', 'Failed to fetch', 0));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(document.title).toBe('Offline · Gargoyle — debian-box');
+    expect(icon()).toBe(faviconHref('unknown'));
   });
 
   it('routes #/events with its filters and marks the nav entry', async () => {

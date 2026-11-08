@@ -7,6 +7,7 @@
   import { api, type ApiClient } from './lib/api/client';
   import type { MetricsQuery } from './lib/api/types';
   import { averagesByKey } from './lib/charts/data';
+  import { documentTitle, faviconHref, setFavicon } from './lib/document-health';
   import { buildQuery } from './lib/charts/groups';
   import { parseRange, rangeById } from './lib/charts/range';
   import { PolledFeed } from './lib/feed.svelte';
@@ -14,6 +15,7 @@
   import type { Visibility } from './lib/poller';
   import { hashQuery, href, parseHash } from './lib/router';
   import { parseEventFilters } from './lib/event-filters';
+  import CheckPage from './pages/CheckPage.svelte';
   import EventsPage from './pages/EventsPage.svelte';
   import OverviewPage from './pages/OverviewPage.svelte';
   import ServicePage from './pages/ServicePage.svelte';
@@ -27,7 +29,7 @@
   }: {
     client?: Pick<
       ApiClient,
-      'overview' | 'metrics' | 'metricsQuery' | 'service' | 'timer' | 'events'
+      'overview' | 'metrics' | 'metricsQuery' | 'service' | 'timer' | 'check' | 'events'
     >;
     visibility?: Visibility;
   } = $props();
@@ -78,6 +80,15 @@
 
   const failure = $derived(feed.error === null ? null : describeFeedError(feed.error));
   const serverNow = $derived(now + feed.clockOffset);
+
+  // The tab shows overall health from any page; while offline the last health may be wrong, so
+  // the favicon falls back to unknown.
+  const title = $derived(documentTitle(feed.data, failure !== null));
+  const favicon = $derived(faviconHref(failure !== null ? 'unknown' : (feed.data?.health ?? null)));
+  $effect(() => {
+    document.title = title;
+  });
+  $effect(() => setFavicon(document, favicon));
 </script>
 
 <svelte:window onhashchange={() => (hash = location.hash)} />
@@ -117,6 +128,10 @@
   {:else if route.name === 'service'}
     {#key route.params.unit}
       <ServicePage unit={route.params.unit ?? ''} {range} {client} {visibility} {serverNow} />
+    {/key}
+  {:else if route.name === 'check'}
+    {#key route.params.name}
+      <CheckPage name={route.params.name ?? ''} {range} {client} {visibility} {serverNow} />
     {/key}
   {:else if route.name === 'events'}
     {#key `${eventFilters.kind}|${eventFilters.target}`}

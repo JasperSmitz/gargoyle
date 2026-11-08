@@ -8,16 +8,20 @@
     health,
     size = 'md',
     label,
+    context,
   }: {
     health: Health;
     size?: 'sm' | 'md' | 'lg';
     /** Replaces the state name, e.g. "2 critical"; the icon still conveys the state. */
     label?: string;
+    /** Spoken before the state where it would otherwise lack a subject, e.g. "Overall health". */
+    context?: string;
   } = $props();
 </script>
 
 <span class="badge {size} health-{health}" data-health={health}>
   <HealthIcon {health} size={size === 'lg' ? 18 : size === 'sm' ? 12 : 14} />
+  {#if context}<span class="sr-only">{context}:</span>{/if}
   <span>{label ?? HEALTH_PRESENTATION[health].label}</span>
 </span>
 

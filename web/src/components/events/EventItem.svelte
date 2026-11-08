@@ -1,9 +1,8 @@
 <script lang="ts">
   import type { HealthEvent } from '../../lib/api/types';
   import { formatRelativeTime, formatTimestamp } from '../../lib/format';
-  import { HEALTH_PRESENTATION } from '../../lib/health';
   import { targetHref } from '../../lib/router';
-  import HealthIcon from '../HealthIcon.svelte';
+  import HealthLabel from '../HealthLabel.svelte';
 
   // One health transition, as a row of a CardList.
   let {
@@ -27,22 +26,14 @@
   <div class="body">
     <div class="line">
       {#if showTarget}
-        {#if link}
-          <a class="target" href={link}><code>{event.target}</code></a>
-        {:else}
-          <code class="target">{event.target}</code>
-        {/if}
+        <a class="target" href={link}><code>{event.target}</code></a>
       {/if}
       <span class="transition">
         {#if event.from}
-          <span class="state health-{event.from}">
-            <HealthIcon health={event.from} size={12} />{HEALTH_PRESENTATION[event.from].label}
-          </span>
+          <HealthLabel health={event.from} />
           <span aria-label="to">→</span>
         {/if}
-        <span class="state health-{event.to}">
-          <HealthIcon health={event.to} size={12} />{HEALTH_PRESENTATION[event.to].label}
-        </span>
+        <HealthLabel health={event.to} />
       </span>
     </div>
     {#if event.message}<p class="message">{event.message}</p>{/if}
@@ -90,26 +81,6 @@
     align-items: center;
     gap: var(--space-1);
     color: var(--color-text-faint);
-  }
-
-  .state {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    font-weight: var(--weight-medium);
-  }
-
-  .health-healthy {
-    color: var(--health-healthy-fg);
-  }
-  .health-warning {
-    color: var(--health-warning-fg);
-  }
-  .health-critical {
-    color: var(--health-critical-fg);
-  }
-  .health-unknown {
-    color: var(--health-unknown-fg);
   }
 
   .message {

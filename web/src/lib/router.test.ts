@@ -65,7 +65,7 @@ describe('targetHref', () => {
     ['service', 'nginx.service', '#/services/nginx.service'],
     ['timer', 'a@b.timer', '#/timers/a%40b.timer'],
     ['system', 'disk:/', '#/system'],
-    ['check', 'Music HTTP', null],
+    ['check', 'Music HTTP', '#/checks/Music%20HTTP'],
   ] as const)('%s %s -> %s', (kind, target, expected) => {
     expect(targetHref(kind, target)).toBe(expected);
   });
