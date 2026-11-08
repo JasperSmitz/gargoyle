@@ -1,7 +1,9 @@
 # Gargoyle configuration.
 #
 # Installed as /etc/gargoyle/gargoyle.toml. Every section is optional; the values shown are the
-# defaults unless marked "example". Check a file with:  gargoyle --config <path> check-config
+# defaults. The examples (commented out) show what to add for your own services, timers and
+# checks. Full reference: /usr/share/doc/gargoyle/CONFIG.md (docs/CONFIG.md in the source).
+# Check a file with:  gargoyle --config <path> check-config   and restart Gargoyle after a change.
 #
 # Durations are written like "30s", "5m", "48h" or "400d".
 
@@ -80,55 +82,55 @@ swap        = { warning = 50.0, critical = 90.0 }                 # percent used
 disk        = { warning = 80.0, critical = 90.0 }                 # percent used
 temperature = { warning = 75.0, critical = 90.0 }                 # celsius
 # Per-mount disk overrides (example); missing keys come from `disk`.
-disk_mounts = { "/srv" = { warning = 90.0, critical = 95.0 } }
+# disk_mounts = { "/srv" = { warning = 90.0, critical = 95.0 } }
 
 # Services to watch (example). Repeat [[service]] for each.
-[[service]]
+# [[service]]
 # Required. Unit name: letters, digits and :_.@- with a .service/.socket/.mount/... suffix.
-unit = "navidrome.service"
+# unit = "navidrome.service"
 # Display name; defaults to the unit name.
-name = "Navidrome"
+# name = "Navidrome"
 # "running" (default): must be active/running.
 # "active": ActiveState=active is enough (e.g. oneshot with RemainAfterExit=yes).
 # "any": only `failed` is a problem.
-expect = "running"
+# expect = "running"
 # Optional: warn when the service uses more memory than this (MiB).
-memory_warning_mb = 2048
+# memory_warning_mb = 2048
 
-[[service]]
-unit = "minecraft.service"
-name = "Minecraft"
+# [[service]]
+# unit = "minecraft.service"
+# name = "Minecraft"
 
 # Timers to watch (example). Repeat [[timer]] for each.
-[[timer]]
+# [[timer]]
 # Required. Must be a .timer unit.
-unit = "music-sync.timer"
-name = "Music sync"
+# unit = "music-sync.timer"
+# name = "Music sync"
 # Triggered service; defaults to the timer's Unit= property.
 # service = "music-sync.service"
 # Optional: warn if there has been no successful run within this age.
-max_age = "26h"
+# max_age = "26h"
 
 # Optional HTTP/TCP probes (example). Names must be unique, without leading/trailing spaces.
-[[check]]
-name = "Music HTTP"
+# [[check]]
+# name = "Music HTTP"
 # "http": GET the url; redirects are not followed and the body is discarded.
 # user:pass@ in the url is sent as basic auth; percent-encode '/', '?', '#' and '@' in them
 # (e.g. %40). The API and logs show the url without query string or fragment, and only
 # scheme://host[:port] when it has user:pass@. https trusts the built-in Mozilla roots only.
-kind = "http"
-url = "http://127.0.0.1:4533/ping"
+# kind = "http"
+# url = "http://127.0.0.1:4533/ping"
 # Expected status code; default is any 2xx.
-expect_status = 200
+# expect_status = 200
 # How often to probe (minimum 1s) and how long to wait (at most interval).
-interval = "60s"
-timeout = "5s"
+# interval = "60s"
+# timeout = "5s"
 # Optional: warn when the probe is slower than this (must be > 0).
 # 1-2 consecutive failures are a warning, 3 or more critical.
-latency_warning = "1s"
+# latency_warning = "1s"
 
-[[check]]
-name = "Game port"
+# [[check]]
+# name = "Game port"
 # "tcp": connect to address (host:port) and close.
-kind = "tcp"
-address = "127.0.0.1:25565"
+# kind = "tcp"
+# address = "127.0.0.1:25565"

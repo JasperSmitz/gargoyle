@@ -1,0 +1,22 @@
+#!/bin/sh
+# Creates the gargoyle system user and lets it (and only it, besides root) read the config.
+set -e
+
+if [ "$1" = configure ]; then
+    if ! getent passwd gargoyle >/dev/null; then
+        adduser --system --group --no-create-home --home /nonexistent --quiet gargoyle
+    fi
+    # Statoverrides rather than chown: dpkg reapplies them whenever it unpacks the files, so an
+    # upgrade never leaves the config root-only (unreadable by the service) or world-readable.
+    if ! dpkg-statoverride --list /etc/gargoyle >/dev/null; then
+        dpkg-statoverride --update --add root gargoyle 0750 /etc/gargoyle
+    fi
+    if ! dpkg-statoverride --list /etc/gargoyle/gargoyle.toml >/dev/null; then
+        dpkg-statoverride --update --add root gargoyle 0640 /etc/gargoyle/gargoyle.toml
+    fi
+fi
+
+# The generated systemd snippet (enable, start or restart) must run after the user exists.
+#DEBHELPER#
+
+exit 0

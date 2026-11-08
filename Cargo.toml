@@ -47,3 +47,14 @@ unwrap_used = "warn"
 # the tests stay fast.
 [profile.dev.package.argon2]
 opt-level = 3
+
+# `make release`. Panics stay `unwind`, not the `abort` ROADMAP M6.1 suggests: the scheduler
+# turns a panicking collector call into a "collector crashed" error (a JoinError from
+# spawn_blocking), storage reuses its connection after a panicked write, and tokio confines a
+# panicking request handler to its own connection task. With `abort`, each of those bugs would
+# kill the whole process instead. The size saving (a few hundred KiB) is not worth that.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"
