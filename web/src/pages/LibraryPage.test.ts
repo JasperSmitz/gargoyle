@@ -125,6 +125,28 @@ describe('LibraryPage', () => {
     expect(albums().every((d) => !d.open)).toBe(true);
   });
 
+  // KNOWN_ISSUES (M7.4): an album closed just before "Expand all" stayed closed. Its `toggle`
+  // event is async, so the set still held it when "Expand all" ran (adding it changed nothing),
+  // and the late event then removed it.
+  it('expands an album whose close is still pending', async () => {
+    await renderPage(async () => example);
+    const first = albums()[0]!;
+    first.open = true;
+    await vi.advanceTimersByTimeAsync(0);
+    first.open = false;
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(albums().map((d) => d.open)).toEqual(albums().map(() => true));
+
+    // And the mirror case: an album opened just before "Collapse all".
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    await vi.advanceTimersByTimeAsync(0);
+    first.open = true;
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(albums().some((d) => d.open)).toBe(false);
+  });
+
   it('keeps an album the user opened open across a poll', async () => {
     await renderPage(async () => example);
     const first = albums()[0]!;
