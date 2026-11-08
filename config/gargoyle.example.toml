@@ -1,0 +1,112 @@
+# Gargoyle configuration.
+#
+# Installed as /etc/gargoyle/gargoyle.toml. Every section is optional; the values shown are the
+# defaults unless marked "example". Check a file with:  gargoyle --config <path> check-config
+#
+# Durations are written like "30s", "5m", "48h" or "400d".
+
+[server]
+# Address and port to serve the dashboard and API on. Keep this on loopback and put a reverse
+# proxy (Caddy, nginx) with TLS in front for remote access. A non-loopback address requires
+# [auth] mode = "basic", or allow_unauthenticated_remote = true.
+listen = "127.0.0.1:9077"
+# Allow a non-loopback address without auth. Only for networks that are themselves the access
+# control, such as a Tailscale or WireGuard interface.
+allow_unauthenticated_remote = false
+
+[auth]
+# "none" or "basic" (HTTP Basic auth, single user). /api/v1/health never requires auth.
+mode = "none"
+username = "admin"
+# argon2id PHC string printed by `gargoyle hash-password`. Required when mode = "basic", unless
+# password_hash_file is set instead (set exactly one of the two).
+# password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
+# File containing only the PHC string; keeps the hash out of this file.
+# password_hash_file = "/etc/gargoyle/password"
+
+[storage]
+# SQLite database file. The directory must be writable by the gargoyle user.
+path = "/var/lib/gargoyle/gargoyle.db"
+# How long full-resolution samples are kept.
+raw_retention = "48h"
+# How long 5-minute rollups (avg/min/max) are kept. Must be at least raw_retention.
+rollup_retention = "400d"
+
+[collector]
+# "linux" reads /proc, /sys and `systemctl show`; "mock" generates demo data.
+mode = "linux"
+# How often system metrics are sampled (minimum 1s).
+system_interval = "10s"
+# How often service and timer states are polled (minimum 1s).
+units_interval = "30s"
+# Import past timer runs from the journal when permitted (needs the systemd-journal group).
+journal_backfill = true
+
+[system]
+# Mount points to monitor. [] auto-detects real filesystems (no tmpfs, overlay, squashfs, ...).
+disks = []
+# Example: disks = ["/", "/srv"]
+# Network interfaces to monitor. [] means all except lo, veth*, docker* and br-*.
+interfaces = []
+# Read temperatures from hwmon / thermal zones when available.
+temperatures = true
+
+# Health thresholds: below warning is healthy, warning <= value < critical is warning, and
+# value >= critical is critical. warning must be less than critical. Each table may set only
+# some keys; the rest keep their defaults. `window` averages cpu and load before evaluation.
+[thresholds]
+cpu         = { warning = 85.0, critical = 95.0, window = "2m" }  # percent
+load        = { warning = 1.5, critical = 3.0, window = "5m" }    # 1-minute load per core
+memory      = { warning = 85.0, critical = 95.0 }                 # percent used
+swap        = { warning = 50.0, critical = 90.0 }                 # percent used
+disk        = { warning = 80.0, critical = 90.0 }                 # percent used
+temperature = { warning = 75.0, critical = 90.0 }                 # celsius
+# Per-mount disk overrides (example); missing keys come from `disk`.
+disk_mounts = { "/srv" = { warning = 90.0, critical = 95.0 } }
+
+# Services to watch (example). Repeat [[service]] for each.
+[[service]]
+# Required. Unit name: letters, digits and :_.@- with a .service/.socket/.mount/... suffix.
+unit = "navidrome.service"
+# Display name; defaults to the unit name.
+name = "Navidrome"
+# "running" (default): must be active/running.
+# "active": ActiveState=active is enough (e.g. oneshot with RemainAfterExit=yes).
+# "any": only `failed` is a problem.
+expect = "running"
+# Optional: warn when the service uses more memory than this (MiB).
+memory_warning_mb = 2048
+
+[[service]]
+unit = "minecraft.service"
+name = "Minecraft"
+
+# Timers to watch (example). Repeat [[timer]] for each.
+[[timer]]
+# Required. Must be a .timer unit.
+unit = "music-sync.timer"
+name = "Music sync"
+# Triggered service; defaults to the timer's Unit= property.
+# service = "music-sync.service"
+# Optional: warn if there has been no successful run within this age.
+max_age = "26h"
+
+# Optional HTTP/TCP probes (example). Names must be unique, without leading/trailing spaces.
+[[check]]
+name = "Music HTTP"
+# "http": GET the url; redirects are not followed and the body is discarded.
+kind = "http"
+url = "http://127.0.0.1:4533/ping"
+# Expected status code; default is any 2xx.
+expect_status = 200
+# How often to probe (minimum 1s) and how long to wait (at most interval).
+interval = "60s"
+timeout = "5s"
+# Optional: warn when the probe is slower than this (must be > 0).
+latency_warning = "1s"
+
+[[check]]
+name = "Game port"
+# "tcp": connect to address (host:port) and close.
+kind = "tcp"
+address = "127.0.0.1:25565"
