@@ -287,7 +287,10 @@ The API rules apply to every endpoint:
   "recentEvents": [ /* Event, max 10 */ ]
 }
 ```
-`memory.used` is `total - available`. `cpu.usage` and `load` are instantaneous values. Health for
+Before the first system sample, `system.ts` is `0` and every system health is `unknown`. When the
+system sample is stale (older than 3× the interval), values are kept but every per-metric `health`
+becomes `unknown`. A disk listed in `[system].disks` that is not mounted appears in `disks` with
+`fsType: ""`, zero sizes and `health: "critical"`. `memory.used` is `total - available`. `cpu.usage` and `load` are instantaneous values. Health for
 cpu and load uses the windowed average (§7). The `net` and `temps` lists may be empty, and an empty
 list means "not available" in the UI.
 
