@@ -61,6 +61,7 @@ describe('collectProblems', () => {
       ['critical', 'Minecraft', 'unit failed (Result=exit-code)'],
       ['critical', 'Music sync', 'last run failed: exit-code (status 1)'],
       ['warning', 'Disk /', '84% used'],
+      ['warning', 'Music library', '2 errors, 4 warnings, 1 info in 95 albums; 1 unreadable file'],
       ['unknown', 'backup.timer', 'never run'],
     ]);
   });
@@ -71,7 +72,26 @@ describe('collectProblems', () => {
     allHealthy.system.health = 'healthy';
     allHealthy.services.forEach((s) => (s.health = 'healthy'));
     allHealthy.timers.forEach((t) => (t.health = 'healthy'));
+    allHealthy.library!.health = 'healthy';
     expect(collectProblems(allHealthy)).toEqual([]);
+  });
+
+  it('links an unhealthy library to its page, with a fallback message', () => {
+    const noMessage: Overview = structuredClone(overview);
+    noMessage.library = { ...noMessage.library!, health: 'unknown', message: null };
+    expect(collectProblems(noMessage)).toContainEqual(
+      expect.objectContaining({
+        kind: 'library',
+        name: 'Music library',
+        message: 'Unknown',
+        href: '#/library',
+      }),
+    );
+  });
+
+  it('leaves out an unconfigured library', () => {
+    const none: Overview = { ...structuredClone(overview), library: null };
+    expect(collectProblems(none).some((p) => p.kind === 'library')).toBe(false);
   });
 
   it('reports system health that no individual metric explains', () => {

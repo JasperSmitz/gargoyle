@@ -24,7 +24,13 @@
         ? `All ${total} targets healthy`
         : `${unhealthy} of ${total} targets need attention`,
   );
-  const KIND_LABEL = { system: 'System', service: 'Service', timer: 'Timer', check: 'Check' };
+  const KIND_LABEL = {
+    system: 'System',
+    service: 'Service',
+    timer: 'Timer',
+    check: 'Check',
+    library: 'Library',
+  };
 </script>
 
 <section class="summary health-{overview.health}" aria-labelledby={headingId}>

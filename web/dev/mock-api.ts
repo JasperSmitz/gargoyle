@@ -9,13 +9,16 @@
 // wandering CPU and memory) so polling and "updated Xs ago" can be seen working.
 // Checks come from mock-checks.ts, one per health state.
 // `VITE_MOCK=offline` answers 503 everywhere instead, to see the offline banner, and
-// `VITE_MOCK=empty` serves a host with no services, timers or checks configured.
+// `VITE_MOCK=empty` serves a host with no services, timers, checks or library configured.
+// The library report is the contract example, its times moved to read the same relative to now.
 
 import { fixtures } from '../src/lib/api/fixtures';
 import {
   TARGET_KINDS,
   type Health,
   type HealthCounts,
+  type LibraryResponse,
+  type LibrarySummary,
   type Overview,
   type ServiceSummary,
 } from '../src/lib/api/types';
@@ -53,6 +56,12 @@ export function respond(
   }
   if (path === '/overview') {
     return { status: 200, body: mode === 'empty' ? emptyOverview(now) : liveOverview(now) };
+  }
+  if (path === '/library') {
+    return {
+      status: 200,
+      body: mode === 'empty' ? fixtures['library-unconfigured.json'] : liveLibrary(now),
+    };
   }
   if (path === '/metrics') return { status: 200, body: { host: HOST, series: seriesInfo() } };
   if (path === '/metrics/query') {
@@ -158,11 +167,13 @@ function liveOverview(at: number): Overview {
   overview.checks = checks(now);
   overview.timers = timers(now);
   overview.recentEvents = events(now, overview.services, { limit: 10 });
+  overview.library = liveLibrarySummary(now);
 
   // The generated timers differ from the example's, so health and counts are recomputed.
   const targets: Health[] = [
     overview.system.health,
     ...[...overview.services, ...overview.timers, ...overview.checks].map((t) => t.health),
+    ...(overview.library ? [overview.library.health] : []),
   ];
   const counts: HealthCounts = { healthy: 0, warning: 0, critical: 0, unknown: 0 };
   for (const health of targets) counts[health] += 1;
@@ -183,11 +194,24 @@ function emptyOverview(at: number): Overview {
   overview.services = [];
   overview.timers = [];
   overview.checks = [];
+  overview.library = null;
   overview.recentEvents = [];
   overview.health = overview.system.health;
   overview.counts = { healthy: 0, warning: 0, critical: 0, unknown: 0 };
   overview.counts[overview.system.health] = 1;
   return overview;
+}
+
+/** The example library summary, polled 20s ago, with a report as old as in the example. */
+function liveLibrarySummary(now: number): LibrarySummary {
+  const t = Math.floor(now);
+  const example = fixtures['library.json'].library!;
+  const age = example.age ?? 0;
+  return { ...example, checkedAt: t - 20, generatedAt: t - age, age };
+}
+
+function liveLibrary(now: number): LibraryResponse {
+  return { ...structuredClone(fixtures['library.json']), library: liveLibrarySummary(now) };
 }
 
 function round(value: number, digits = 1): number {

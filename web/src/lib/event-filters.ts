@@ -38,6 +38,7 @@ export function targetOptions(
   for (const s of overview?.services ?? []) add('service', s.unit);
   for (const t of overview?.timers ?? []) add('timer', t.unit);
   for (const c of overview?.checks ?? []) add('check', c.name);
+  if (overview?.library) add('library', 'library');
   for (const e of events) add(e.targetKind, e.target);
   const order = (kind: TargetKind) => TARGET_KINDS.indexOf(kind);
   return [...options.values()].sort(

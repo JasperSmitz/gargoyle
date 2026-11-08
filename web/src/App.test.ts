@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
 import { ApiRequestError, type ApiClient } from './lib/api/client';
@@ -25,6 +25,7 @@ function clientWith(overview: (opts?: { signal?: AbortSignal }) => Promise<Overv
     timer: vi.fn(async () => fixtures['timer-detail.json']),
     check: vi.fn(async () => fixtures['check-detail.json']),
     events: vi.fn(async () => fixtures['events.json']),
+    library: vi.fn(async () => fixtures['library.json']),
   };
 }
 
@@ -319,5 +320,48 @@ describe('App', () => {
       { limit: 50, target: 'minecraft.service', kind: undefined },
       expect.anything(),
     );
+  });
+
+  it('shows the Library nav entry only when the library is configured', async () => {
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    expect(
+      within(nav)
+        .getAllByRole('link')
+        .map((a) => a.textContent),
+    ).toEqual(['Overview', 'System', 'Library', 'Events']);
+    expect(within(nav).getByRole('link', { name: 'Library' }).getAttribute('href')).toBe(
+      '#/library',
+    );
+
+    client.overview.mockResolvedValue({ ...fixtures['overview.json'], library: null });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(within(nav).queryByRole('link', { name: 'Library' })).toBeNull();
+  });
+
+  it('routes #/library with the severity filter and marks the nav entry', async () => {
+    location.hash = '#/library?severity=error';
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.library).toHaveBeenCalled();
+    expect(screen.getByRole('heading', { level: 1, name: 'Music library' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Library' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Errors only' }).getAttribute('aria-current')).toBe(
+      'true',
+    );
+    expect(document.title).toContain('Library');
+  });
+
+  it('explains a direct visit to #/library without [library]', async () => {
+    location.hash = '#/library';
+    const client = clientWith(async () => ({ ...fixtures['overview.json'], library: null }));
+    client.library.mockResolvedValue(fixtures['library-unconfigured.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByText('No music library configured')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Library' })).toBeNull();
   });
 });

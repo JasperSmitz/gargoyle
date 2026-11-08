@@ -4,6 +4,7 @@ import type {
   ChecksResponse,
   EventsResponse,
   HealthResponse,
+  LibraryResponse,
   MetricsQuery,
   MetricsResponse,
   Overview,
@@ -152,6 +153,7 @@ export function createClient({ fetch: fetchImpl, baseUrl = '/api/v1' }: ClientOp
         { key: opts.keys, from: opts.from, to: opts.to, points: opts.points },
         req,
       ),
+    library: (req?: RequestOptions) => get<LibraryResponse>('/library', {}, req),
     events: (
       opts: {
         since?: UnixSeconds;

@@ -53,6 +53,7 @@
     service: 'Services',
     timer: 'Timers',
     check: 'Checks',
+    library: 'Library',
   };
 
   const allOptions = $derived(targetOptions(overview, feed.log.events));

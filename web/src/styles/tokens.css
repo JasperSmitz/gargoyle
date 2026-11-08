@@ -41,6 +41,20 @@
   --health-unknown-border: #cdc7be;
 
   /*
+   * Liner issue severities (library page). Aliases of the health palette, so they follow it in
+   * dark mode too; info is neutral. Chips always pair them with an icon and text.
+   */
+  --severity-error-fg: var(--health-critical-fg);
+  --severity-error-bg: var(--health-critical-bg);
+  --severity-error-border: var(--health-critical-border);
+  --severity-warning-fg: var(--health-warning-fg);
+  --severity-warning-bg: var(--health-warning-bg);
+  --severity-warning-border: var(--health-warning-border);
+  --severity-info-fg: var(--health-unknown-fg);
+  --severity-info-bg: var(--health-unknown-bg);
+  --severity-info-border: var(--health-unknown-border);
+
+  /*
    * Charts. Categorical series slots in fixed order (assigned per entity, never by rank); validated
    * with the dataviz validate_palette.js against --color-surface in each mode. Slots 3–5 are below
    * 3:1 on the light surface, so every chart also has a legend and a table view. Never use these

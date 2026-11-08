@@ -28,7 +28,14 @@ describe('targetOptions', () => {
       'timer:backup.timer',
       'timer:music-sync.timer',
       'check:Music HTTP',
+      'library:library',
     ]);
+  });
+
+  it('offers the library only when it is configured', () => {
+    const overview = { ...fixtures['overview.json'], library: null };
+    const options = targetOptions(overview, []);
+    expect(options.some((o) => o.kind === 'library')).toBe(false);
   });
 
   it('works before the overview has loaded', () => {

@@ -3,12 +3,14 @@ import type {
   CheckDetail,
   ChecksResponse,
   EventsResponse,
+  LibraryResponse,
   MetricsQuery,
   Overview,
   ServiceDetail,
   TimerDetail,
   TimersResponse,
 } from '../src/lib/api/types';
+import { fixtures } from '../src/lib/api/fixtures';
 import { respond } from './mock-api';
 
 const NOW = 1_794_200_000;
@@ -80,10 +82,16 @@ describe('mock modes', () => {
     expect(overview.services).toEqual([]);
     expect(overview.timers).toEqual([]);
     expect(overview.checks).toEqual([]);
+    expect(overview.library).toBeNull();
     expect(overview.recentEvents).toEqual([]);
     expect(Object.values(overview.counts).reduce((a, b) => a + b, 0)).toBe(1);
     expect(overview.health).toBe('healthy');
     expect(overview.counts.healthy).toBe(1);
+  });
+
+  it('serves an unconfigured library in the empty mode', () => {
+    const library = respond('/library', new URLSearchParams(), 'empty', NOW).body;
+    expect(library).toEqual(fixtures['library-unconfigured.json']);
   });
 
   it('fails everything when offline', () => {
@@ -160,7 +168,7 @@ describe('mock timers', () => {
     expect(overview.timers).toEqual(get<TimersResponse>('/timers').body.timers);
     const total = Object.values(overview.counts).reduce((a, b) => a + b, 0);
     expect(total).toBe(
-      1 + overview.services.length + overview.timers.length + overview.checks.length,
+      2 + overview.services.length + overview.timers.length + overview.checks.length,
     );
     expect(overview.recentEvents).toHaveLength(10);
   });
@@ -226,5 +234,17 @@ describe('mock /events', () => {
     const a = get<EventsResponse>('/events').body.events.at(-1)!;
     const b = get<EventsResponse>('/events', `until=${a.ts + 1}&limit=5`, NOW + 120).body.events;
     expect(b.find((e) => e.id === a.id)).toEqual(a);
+  });
+});
+
+describe('mock library', () => {
+  it('serves the example report with times relative to now, matching the overview', () => {
+    const later = NOW + 3600;
+    const { body } = get<LibraryResponse>('/library', '', later);
+    expect(body.configured).toBe(true);
+    expect(body.report).toEqual(fixtures['library.json'].report);
+    expect(body.library).toMatchObject({ checkedAt: later - 20, age: 68_000 });
+    expect(body.library!.generatedAt).toBe(later - 68_000);
+    expect(get<Overview>('/overview', '', later).body.library).toEqual(body.library);
   });
 });

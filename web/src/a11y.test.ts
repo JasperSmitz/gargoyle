@@ -28,6 +28,7 @@ function client(overview: () => Promise<Overview>) {
     timer: async () => fixtures['timer-detail.json'],
     check: async () => fixtures['check-detail.json'],
     events: async () => fixtures['events.json'],
+    library: async () => fixtures['library.json'],
   };
 }
 
@@ -54,6 +55,17 @@ const notFound = () => ({
   timer: async () => {
     throw new ApiRequestError('not_found', 'unknown timer', 404);
   },
+});
+
+// The `normal` overview has a library card (overview.json configures `[library]`).
+const unconfigured = () => ({
+  ...client(async () => ({ ...fixtures['overview.json'], library: null })),
+  library: async () => fixtures['library-unconfigured.json'],
+});
+
+const brokenLibrary = () => ({
+  ...normal(),
+  library: async () => ({ ...fixtures['library.json'], report: null }),
 });
 
 const pending = () => client(() => new Promise<Overview>(() => {}));
@@ -87,6 +99,11 @@ describe('accessibility (axe)', () => {
     ['timer detail', '#/timers/music-sync.timer', normal, 'heading'],
     ['check detail', '#/checks/Game%20port', normal, 'heading'],
     ['events', '#/events', normal, 'heading'],
+    ['library', '#/library', normal, 'heading'],
+    ['library, filtered', '#/library?severity=error', normal, 'heading'],
+    ['library, no valid report', '#/library', brokenLibrary, 'heading'],
+    ['library, not configured', '#/library', unconfigured, 'heading'],
+    ['overview without a library', '', unconfigured, 'heading'],
     ['not found', '#/nowhere', normal, 'heading'],
     ['unknown timer', '#/timers/nope.timer', notFound, 'heading'],
   ] as const)('%s has no serious or critical violations', async (_name, hash, make, ready) => {
