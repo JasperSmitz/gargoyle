@@ -68,7 +68,7 @@
   },
   "counts": {
     "healthy": 2,
-    "warning": 1,
+    "warning": 2,
     "critical": 2,
     "unknown": 1
   },
@@ -142,6 +142,23 @@
       "consecutiveFailures": 0
     }
   ],
+  "library": {
+    "name": "Music library",
+    "health": "warning",
+    "message": "2 errors, 4 warnings, 1 info in 95 albums; 1 unreadable file",
+    "checkedAt": 1794199980,
+    "generatedAt": 1794132000,
+    "age": 68000,
+    "maxAge": 93600,
+    "warnOn": "error",
+    "issueCounts": {
+      "error": 2,
+      "warning": 4,
+      "info": 1
+    },
+    "unreadableFiles": 1,
+    "albums": 95
+  },
   "recentEvents": [
     {
       "id": 813,
@@ -169,6 +186,15 @@
       "from": "healthy",
       "to": "warning",
       "message": "disk / at 84% (warning ≥ 80%)"
+    },
+    {
+      "id": 810,
+      "ts": 1794133000,
+      "targetKind": "library",
+      "target": "library",
+      "from": "healthy",
+      "to": "warning",
+      "message": "2 errors, 4 warnings, 1 info in 95 albums; 1 unreadable file"
     }
   ]
 }

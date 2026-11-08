@@ -11,7 +11,8 @@ Contents: [Requirements](#requirements) · [Building](#building) ·
 [Installing the .deb](#installing-the-deb) · [Manual install](#manual-install-without-the-deb) ·
 [Configuring](#configuring-services-timers-and-checks) ·
 [Authentication](#enabling-authentication) · [Remote access](#reverse-proxy) ·
-[Journal access](#journal-access-for-timer-history) · [Upgrade](#upgrading) ·
+[Journal access](#journal-access-for-timer-history) ·
+[Music library report](#music-library-report-liner) · [Upgrade](#upgrading) ·
 [Backup](#backup) · [Uninstall](#uninstalling) · [Troubleshooting](#troubleshooting)
 
 ## Requirements
@@ -338,6 +339,149 @@ journalctl -u gargoyle | grep -i journal     # "imported timer runs from the jou
 Without it, the log shows a single `journal backfill failed` warning at startup, which is
 harmless. Set `journal_backfill = false` to silence it.
 
+## Music library report (Liner)
+
+Gargoyle can show the metadata health of a music library: missing or duplicate track numbers,
+multi-disc albums without disc tags, split albums, unreadable files and so on. The checks are
+done by Liner, a separate read-only linter (its own repository and README). Liner writes a JSON report;
+Gargoyle only **reads that file**. It never runs Liner. The library card is never critical:
+metadata problems show as warnings, and a missing, unreadable or unsupported report shows as
+unknown ([ADR 0007](decisions/0007-liner-report-integration.md)).
+
+The recommended setup runs Liner on the server, against the library copy Navidrome serves
+(`/srv/music` below), from a daily systemd timer. Gargoyle then monitors both the timer (did the
+scan run?) and the report (what did it find?).
+
+### 1. Install Liner
+
+Build Liner on your build machine (see its README; a release build needs at most `GLIBC_2.34`,
+so it runs on Debian 12) and install the binary on the server:
+
+```sh
+sudo install -m 0755 liner /usr/local/bin/liner
+```
+
+### 2. A system user and the scan service
+
+Use a static system user, **not** `DynamicUser=yes`. With `DynamicUser=yes`, systemd puts
+`StateDirectory=` under `/var/lib/private/`, which only root can enter, so the `gargoyle` user
+could not read the report through the `/var/lib/liner` link.
+
+```sh
+sudo adduser --system --group --no-create-home --home /nonexistent liner
+```
+
+The library must be readable by `liner`; world-readable files are enough. If they are not, add
+`liner` to a group that can read them (for example `sudo adduser liner navidrome`).
+
+`/etc/systemd/system/liner-scan.service`:
+
+```ini
+[Unit]
+Description=Liner music library metadata report
+
+[Service]
+Type=oneshot
+User=liner
+Group=liner
+# /var/lib/liner, owned by liner, readable by gargoyle; the report is written with mode 0644.
+StateDirectory=liner
+StateDirectoryMode=0755
+UMask=0022
+ExecStart=/usr/local/bin/liner scan /srv/music --format json \
+    --output /var/lib/liner/report.json --fail-on never --config /dev/null
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+Nice=10
+IOSchedulingClass=idle
+```
+
+- **`--fail-on never` is required.** Without it Liner exits 1 whenever the library has an issue,
+  and the timer shows as failed although the scan worked. Real failures (an unreadable library
+  root, an unwritable report) still exit 2 and still fail the unit.
+- Do not add `--min-severity`: issues it hides are hidden from Gargoyle too. (The Library page
+  says how many were hidden.)
+- `--config /dev/null` keeps the run independent of any Liner user config.
+- Liner writes the report to a temporary file and renames it into place, so Gargoyle never reads
+  a half-written report. The report must be outside the library; `--output` refuses otherwise.
+- With `ProtectHome=yes` the library must not be under `/home`. If it is, use
+  `ProtectHome=read-only` instead.
+
+### 3. The timer
+
+`/etc/systemd/system/liner-scan.timer`:
+
+```ini
+[Unit]
+Description=Daily Liner music library report
+
+[Timer]
+OnCalendar=*-*-* 05:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Pick an `OnCalendar=` time after your daily library sync has normally finished, so the report
+describes the synced state. Then:
+
+```sh
+sudo systemd-analyze verify /etc/systemd/system/liner-scan.service /etc/systemd/system/liner-scan.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now liner-scan.timer
+sudo systemctl start liner-scan.service          # first report now, instead of tomorrow
+ls -l /var/lib/liner/report.json                 # -rw-r--r-- 1 liner liner ...
+sudo -u gargoyle head -c 200 /var/lib/liner/report.json   # proves gargoyle can read it
+```
+
+### 4. Configure Gargoyle
+
+Add to `/etc/gargoyle/gargoyle.toml` (every key is described in
+[CONFIG.md](CONFIG.md#library)):
+
+```toml
+[library]
+report = "/var/lib/liner/report.json"
+name = "Music library"
+max_age = "26h"        # a daily timer plus its random delay, with margin
+warn_on = "error"      # or "warning" to be told about every inconsistency
+
+[[timer]]
+unit = "liner-scan.timer"
+name = "Library scan"
+max_age = "26h"
+```
+
+Validate and restart as in [Configuring](#configuring-services-timers-and-checks). The
+dashboard gets a **Library** entry in the navigation and a library card on the overview. The
+`[[timer]]` entry turns critical if a scan fails; the library card turns warning if the report
+gets older than `max_age`, so a timer that silently stopped is noticed too.
+
+### Alternative: scan elsewhere and copy the report
+
+If the master copy of the library lives on another machine (a desktop that syncs to the server),
+run Liner there and copy only the report to the server, for example from a timer or cron job on
+that machine:
+
+```sh
+liner scan ~/Music --format json --output ~/.cache/liner-report.json --fail-on never
+rsync --chmod=F644 ~/.cache/liner-report.json server:/var/lib/liner/report.json
+```
+
+On the server, create `/var/lib/liner` once (`sudo install -d -m 0755 -o <your user> /var/lib/liner`)
+so your user can write it and `gargoyle` can read it. Do not use `rsync --inplace`: plain rsync
+writes a temporary file and renames it, like Liner. The age Gargoyle shows is the age of the
+scan (`generated_at`), not of the copy, so a copy job that keeps sending an old report is
+noticed too. The report then describes the desktop's copy, so paths match the server's only if
+the two libraries are laid out the same way.
+
 ## Upgrading
 
 Back up the database first (next section). Then:
@@ -409,6 +553,9 @@ shows more.
 | A service shows **not found** | The unit name is wrong or not loaded: compare with `systemctl list-units --all <name>`. Names are case-sensitive and need their suffix (`.service`). |
 | All services show **unknown** and the log has `systemctl` errors | `systemctl show` failed. Check `systemctl --version` is 252 or newer (`--timestamp=unix`). If you changed the unit, make sure it still allows `AF_UNIX` (D-Bus) and does not set `PrivateUsers=`. |
 | Timers have no history from before startup; log says `journal backfill failed` | The service cannot read the journal. See [Journal access](#journal-access-for-timer-history). |
+| The library card shows **report not found** or **cannot read report: permission denied** | Check the path in `library.report`, and that `sudo -u gargoyle head -c1 <path>` works: every directory on the way needs `x` for others (or the `gargoyle` group) and the file `r`. A Liner unit with `DynamicUser=yes` hides its `StateDirectory=` from other users; use a static user as in [Music library report](#music-library-report-liner). |
+| The library card shows **unsupported Liner schema 2.0.0** | Liner was upgraded to a report format this Gargoyle does not know. Upgrade Gargoyle, or keep the older Liner until a Gargoyle release supports it. |
+| The library card shows **report is 3d old** | The scan has not run. Look at the `liner-scan.timer` card and at `journalctl -u liner-scan.service`. |
 | A `/home` or other disk is missing | Auto-detection skips pseudo filesystems and lists each device once. List mount points explicitly in `system.disks`. |
 | The page is blank or unstyled; the browser console reports CSP violations | Something is adding inline scripts or styles: a proxy that injects content, or a second `Content-Security-Policy` header from the proxy. Remove it; Gargoyle's own policy allows only its own files. Browser extensions can cause the same messages and are harmless. |
 | The browser keeps asking for the password | Wrong user name or password, or the hash does not match. Generate a new hash and restart. Many failed attempts in a short time make Gargoyle refuse new logins for a few seconds. |

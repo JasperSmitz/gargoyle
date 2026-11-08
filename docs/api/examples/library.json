@@ -1,0 +1,196 @@
+{
+  "host": "debian-box",
+  "configured": true,
+  "library": {
+    "name": "Music library",
+    "health": "warning",
+    "message": "2 errors, 4 warnings, 1 info in 95 albums; 1 unreadable file",
+    "checkedAt": 1794199980,
+    "generatedAt": 1794132000,
+    "age": 68000,
+    "maxAge": 93600,
+    "warnOn": "error",
+    "issueCounts": {
+      "error": 2,
+      "warning": 4,
+      "info": 1
+    },
+    "unreadableFiles": 1,
+    "albums": 95
+  },
+  "report": {
+    "schemaVersion": "1.0.0",
+    "tool": {
+      "name": "liner",
+      "version": "0.1.0"
+    },
+    "minSeverity": "info",
+    "summary": {
+      "filesScanned": 1239,
+      "audioFiles": 1148,
+      "unreadableFiles": 1,
+      "albums": 95,
+      "issueCounts": {
+        "error": 2,
+        "warning": 4,
+        "info": 1
+      },
+      "issuesHidden": 0,
+      "byCode": [
+        {
+          "code": "duplicate-track-position",
+          "count": 1
+        },
+        {
+          "code": "inconsistent-tag-spelling",
+          "count": 1
+        },
+        {
+          "code": "inconsistent-year",
+          "count": 1
+        },
+        {
+          "code": "likely-missing-disc-numbers",
+          "count": 1
+        },
+        {
+          "code": "missing-album-artist",
+          "count": 1
+        },
+        {
+          "code": "split-album",
+          "count": 1
+        },
+        {
+          "code": "track-number-gap",
+          "count": 1
+        }
+      ]
+    },
+    "albums": [
+      {
+        "id": "Sample Person/Field Notes",
+        "title": "Field Notes",
+        "albumArtist": null,
+        "discCount": 1,
+        "trackCount": 4,
+        "issues": [
+          {
+            "code": "duplicate-track-position",
+            "severity": "error",
+            "scope": "album",
+            "message": "Disc 1 track 2 appears in 2 files",
+            "paths": [
+              "Sample Person/Field Notes/02 Morning.flac",
+              "Sample Person/Field Notes/02 Morning (1).flac"
+            ],
+            "pathsTotal": 2
+          },
+          {
+            "code": "inconsistent-tag-spelling",
+            "severity": "warning",
+            "scope": "album",
+            "message": "Album title is spelled 2 ways: 'Field Notes', 'field notes '",
+            "paths": [
+              "Sample Person/Field Notes/01 Arrival.flac",
+              "Sample Person/Field Notes/02 Morning (1).flac",
+              "Sample Person/Field Notes/02 Morning.flac",
+              "Sample Person/Field Notes/04 Leaving.flac"
+            ],
+            "pathsTotal": 4
+          },
+          {
+            "code": "track-number-gap",
+            "severity": "warning",
+            "scope": "album",
+            "message": "Missing track 3 (track total 4)",
+            "paths": [
+              "Sample Person/Field Notes/01 Arrival.flac",
+              "Sample Person/Field Notes/02 Morning (1).flac",
+              "Sample Person/Field Notes/02 Morning.flac",
+              "Sample Person/Field Notes/04 Leaving.flac"
+            ],
+            "pathsTotal": 4
+          }
+        ]
+      },
+      {
+        "id": "The Examples/Night Drive",
+        "title": "Night Drive",
+        "albumArtist": "The Examples",
+        "discCount": 1,
+        "trackCount": 20,
+        "issues": [
+          {
+            "code": "likely-missing-disc-numbers",
+            "severity": "error",
+            "scope": "album",
+            "message": "Track numbers 1, 2 are each used by different tracks; probably 2 discs without disc numbers",
+            "paths": [
+              "The Examples/Night Drive/01 Ignition.flac",
+              "The Examples/Night Drive/01 Overture.flac",
+              "The Examples/Night Drive/02 Highway.flac",
+              "The Examples/Night Drive/02 Streetlights.flac"
+            ],
+            "pathsTotal": 4
+          },
+          {
+            "code": "inconsistent-year",
+            "severity": "info",
+            "scope": "album",
+            "message": "Tracks have 2 different years: 2019, 2021",
+            "paths": [
+              "The Examples/Night Drive/01 Ignition.flac",
+              "The Examples/Night Drive/01 Overture.flac"
+            ],
+            "pathsTotal": 20
+          }
+        ]
+      },
+      {
+        "id": "Various/Summer Mix",
+        "title": "Summer Mix",
+        "albumArtist": null,
+        "discCount": 1,
+        "trackCount": 2,
+        "issues": [
+          {
+            "code": "missing-album-artist",
+            "severity": "warning",
+            "scope": "album",
+            "message": "Tracks have 2 different artists but no album artist",
+            "paths": [
+              "Various/Summer Mix/01 Ann.mp3",
+              "Various/Summer Mix/02 Bob.mp3"
+            ],
+            "pathsTotal": 2
+          }
+        ]
+      }
+    ],
+    "libraryIssues": [
+      {
+        "code": "split-album",
+        "severity": "warning",
+        "scope": "library",
+        "message": "Album 'Live' by 'Quiet Hours' is split over 2 directories",
+        "paths": [
+          "Quiet Hours/Live (Bonus)/01 Encore.flac",
+          "Quiet Hours/Live/01 Opening.flac"
+        ],
+        "pathsTotal": 2
+      }
+    ],
+    "errors": [
+      {
+        "path": "Sample Person/Field Notes/05 Unfinished.flac",
+        "kind": "corrupt",
+        "message": "failed to parse Flac file: failed to fill whole buffer"
+      }
+    ],
+    "issuesTotal": 7,
+    "issuesTruncated": false,
+    "errorsTotal": 1,
+    "errorsTruncated": false
+  }
+}

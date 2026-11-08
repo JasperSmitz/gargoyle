@@ -87,6 +87,13 @@ latency_warning = "1s"
 name = "Game port"
 kind = "tcp"
 address = "127.0.0.1:25565"
+
+[library]
+report = "/var/lib/liner/report.json"
+name = "Music library"
+max_age = "26h"
+warn_on = "error"
+interval = "60s"
 ```
 
 ## `[server]`
@@ -201,6 +208,21 @@ are a warning; three or more are critical.
 | `check.timeout` | duration | `"5s"` | How long to wait for an answer. Greater than 0 and not longer than `interval`. |
 | `check.latency_warning` | duration | none | Warns when a successful probe takes longer than this. Greater than 0. |
 
+## `[library]`
+
+Optional. Shows a music library's metadata health from the JSON report of
+[Liner](DEPLOYMENT.md#music-library-report-liner), a separate tool that Gargoyle never runs: it
+only reads the report file. Without this section there is no Library page, overview card or
+library target. See [ADR 0007](decisions/0007-liner-report-integration.md).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `library.report` | path | *required* | The report written by `liner scan --format json --output <file>`. Must be readable by the `gargoyle` user. A relative path is relative to Gargoyle's working directory. The path is never shown in the dashboard or API. Reports with schema version `1.x` are understood; files over 32 MiB are refused. |
+| `library.name` | string | `"Music library"` | Display name of the library card and page. Not empty, without leading or trailing spaces. |
+| `library.max_age` | duration | `"26h"` | Warns when the report's `generated_at` is older than this, for example because the scan timer stopped. At least `1m`. `"26h"` suits a daily scan. |
+| `library.warn_on` | `"error"` \| `"warning"` \| `"info"` \| `"never"` | `"error"` | The lowest issue severity that turns the library to warning. Unreadable files (Liner's `errors[]`) count as errors and also warn, except with `"never"`, which warns only about the report's age. The library is never critical. |
+| `library.interval` | duration | `"60s"` | How often Gargoyle checks the file. It is read and parsed again only when it changed. At least `1s`. |
+
 ## Validation rules in short
 
 - Unit names follow the systemd naming rules above; timers must be `.timer` and a timer's
@@ -209,6 +231,8 @@ are a warning; three or more are critical.
 - In every threshold, `warning < critical`.
 - Intervals and windows are at least `1s`; `raw_retention` is at least `10m` and not longer than
   `rollup_retention`; a check's `timeout` is not longer than its `interval`.
+- `library.report` must not be empty, `library.name` must not be empty or padded with spaces,
+  `library.max_age` is at least `1m` and `library.interval` at least `1s`.
 - `server.listen` must be loopback, unless `auth.mode = "basic"` or
   `allow_unauthenticated_remote = true`.
 - With `auth.mode = "basic"`: a non-empty `username` and exactly one of `password_hash` (an

@@ -3,6 +3,8 @@
 Gargoyle is a single, self-contained, **read-only** monitoring binary for one Debian server. It
 collects system metrics and systemd unit/timer state and stores history in an embedded SQLite file.
 It serves a JSON API and an embedded web dashboard. It has no external infrastructure.
+Optionally it also shows a music library's metadata health from a report file written by Liner, a
+separate tool ([ADR 0007](decisions/0007-liner-report-integration.md)).
 
 Key decisions are recorded in [`docs/decisions/`](decisions/). The API contract is in this document
 (§6) and in example payloads under [`docs/api/`](api/).
@@ -26,6 +28,7 @@ Key decisions are recorded in [`docs/decisions/`](decisions/). The API contract 
 |---|---|
 | **Collector** | Reads raw facts: counters, gauges, unit properties. Does no health logic and no storage. Has two implementations: Linux and Mock. |
 | **Checks** | Optional generic HTTP/TCP probes declared in config, such as "GET this URL and expect 200". |
+| **Library reader** | Optional (`[library]`). Polls one Liner JSON report file, parses it when it changes and keeps an API view of it in `State` ([ADR 0007](decisions/0007-liner-report-integration.md)). Never runs Liner. |
 | **Core** | Pure logic with no IO: config model and validation, rate calculation from counter deltas, health evaluation, and API DTOs. |
 | **Scheduler** | Runs collection on fixed intervals. Computes metrics and health, updates the in-memory `State`, writes to storage and records health transitions as events. |
 | **Storage** | SQLite (WAL). Holds the time series (raw and 5-minute rollups), events and timer runs. Also runs the retention job. |
@@ -40,7 +43,8 @@ always fresh. Charts and event logs come from SQLite.
 ```
 Cargo.toml                 # workspace (resolver 3, edition 2024)
 crates/
-  gargoyle-core/           # pure: config, model, health, rates, api DTOs   (deps: serde, toml, humantime-serde, thiserror)
+  gargoyle-core/           # pure: config, model, health, rates, api DTOs, Liner report parser
+                           #   (deps: serde, serde_json, toml, humantime-serde, thiserror)
   gargoyle-collector/      # Collector trait, LinuxCollector, MockCollector, parsers + fixtures
   gargoyle/                # binary: cli, scheduler, storage, checks, http, auth, ui embedding
 web/                       # Svelte 5 + Vite + TS frontend (pnpm)
@@ -92,10 +96,16 @@ framework or state library.
    never overlap). Latency is stored as `check.latency:<name>` whenever the probe got an answer
    (an HTTP response, even with the wrong status, or an accepted TCP connection). Health is then
    evaluated and transitions of that check are logged.
-4. The **maintenance tick** runs every 5 minutes. It rolls up completed 5-minute buckets from
+4. The **library tick** (only with `[library]`) runs every `library.interval` (default 60s), the
+   first one 1s after startup. It `stat`s the report file and reads and parses it only when it
+   changed (device, inode, size, mtime or ctime) or the last read failed with an IO error. The
+   parsed API view is kept in `State`. Health is evaluated on every tick, because the report's
+   age grows, and transitions of the `library` target are logged with the unit-tick rules.
+   Files over 32 MiB are refused. All file IO runs in `spawn_blocking`.
+5. The **maintenance tick** runs every 5 minutes. It rolls up completed 5-minute buckets from
    `points_raw` into `points_5m`, then deletes rows past retention. Once a day it runs
    `PRAGMA optimize`.
-5. **HTTP** handlers read `State` for current data and query storage for history. No handler ever
+6. **HTTP** handlers read `State` for current data and query storage for history. No handler ever
    causes a collection or any side effect on the host.
 
 If a collection fails, the error is logged and stored on the target as `message`. Targets whose last
@@ -214,7 +224,7 @@ CREATE TABLE points_5m  (series_id INTEGER NOT NULL, ts INTEGER NOT NULL,       
                       avg REAL NOT NULL, min REAL NOT NULL, max REAL NOT NULL, count INTEGER NOT NULL,
                       PRIMARY KEY (series_id, ts)) WITHOUT ROWID;
 CREATE TABLE events  (id INTEGER PRIMARY KEY, host_id INTEGER NOT NULL, ts INTEGER NOT NULL,
-                      target_kind TEXT NOT NULL,      -- system|service|timer|check
+                      target_kind TEXT NOT NULL,      -- system|service|timer|check|library
                       target TEXT NOT NULL,           -- e.g. "cpu", "nginx.service"
                       from_state TEXT, to_state TEXT NOT NULL, message TEXT);
 CREATE INDEX events_ts ON events(host_id, ts);
@@ -312,6 +322,7 @@ The API rules apply to every endpoint:
 | `GET /api/v1/metrics` | Available series keys with units and labels. |
 | `GET /api/v1/metrics/query?key=..&key=..&from=..&to=..&points=300` | Time series for charts. |
 | `GET /api/v1/events?since=..&until=..&target=..&limit=100` | Health transition log, newest first. |
+| `GET /api/v1/library` | Music library report (Liner) summary and issues; `configured: false` without `[library]`. |
 
 **`GET /api/v1/overview`**
 ```json
@@ -334,6 +345,7 @@ The API rules apply to every endpoint:
   "services": [ /* ServiceSummary, see below */ ],
   "timers":   [ /* TimerSummary */ ],
   "checks":   [ /* CheckSummary */ ],
+  "library":  /* LibrarySummary, or null without [library] */,
   "recentEvents": [ /* Event, max 10 */ ]
 }
 ```
@@ -385,6 +397,62 @@ failures from before the restart). Failure
 messages read `<reason> (<n> consecutive failure[s])`, e.g. `connection refused`, `timed out after
 5s` or `unexpected status 500 (expected 2xx)`; a slow success reads `slow: 1200 ms (warning ≥ 1s)`.
 
+**LibrarySummary** — `overview.library`, and `library` in `GET /api/v1/library`. `null` when
+`[library]` is not configured.
+```json
+{ "name": "Music library", "health": "warning",
+  "message": "2 errors, 4 warnings, 1 info in 95 albums; 1 unreadable file",
+  "checkedAt": 1794199980, "generatedAt": 1794132000, "age": 68000, "maxAge": 93600,
+  "warnOn": "error", "issueCounts": { "error": 2, "warning": 4, "info": 1 },
+  "unreadableFiles": 1, "albums": 95 }
+```
+- `name`, `maxAge` (seconds) and `warnOn` (`"error" | "warning" | "info" | "never"`) echo the
+  config. The report path is never shown (§9.4).
+- `checkedAt` is when the file was last polled (`null` before the first poll).
+- `generatedAt` is the report's `generated_at` as unix seconds, and `age` is the response time
+  minus `generatedAt`, clamped at 0. `issueCounts` (from Liner's `summary.issues_by_severity`),
+  `unreadableFiles` and `albums` come from the report. All five are `null` when there is no valid
+  report (not read yet, or the last read failed; `message` then says why).
+
+**`GET /api/v1/library`** returns `{ "host", "configured", "library", "report" }`. Without
+`[library]` it is `200` with `{ "host", "configured": false, "library": null, "report": null }`
+(`library-unconfigured.json`), so the UI needs no error handling to find out. With it,
+`library` is a LibrarySummary and `report` is the view of the last valid report, or `null`:
+```json
+{ "schemaVersion": "1.0.0", "tool": { "name": "liner", "version": "0.1.0" }, "minSeverity": "info",
+  "summary": { "filesScanned": 1239, "audioFiles": 1148, "unreadableFiles": 1, "albums": 95,
+               "issueCounts": { "error": 2, "warning": 4, "info": 1 }, "issuesHidden": 0,
+               "byCode": [ { "code": "duplicate-track-position", "count": 1 } ] },
+  "albums": [ { "id": "Sample Person/Field Notes", "title": "Field Notes", "albumArtist": null,
+                "discCount": 1, "trackCount": 4,
+                "issues": [ { "code": "duplicate-track-position", "severity": "error", "scope": "album",
+                              "message": "Disc 1 track 2 appears in 2 files",
+                              "paths": ["Sample Person/Field Notes/02 Morning.flac", "..."],
+                              "pathsTotal": 2 } ] } ],
+  "libraryIssues": [ /* LibraryIssue with scope "library" */ ],
+  "errors": [ { "path": "Sample Person/Field Notes/05 Unfinished.flac", "kind": "corrupt",
+                "message": "failed to parse Flac file: failed to fill whole buffer" } ],
+  "issuesTotal": 7, "issuesTruncated": false, "errorsTotal": 1, "errorsTruncated": false }
+```
+- Only the report's subset shown here is exposed: no per-track data, no `details`, and not
+  Liner's absolute `root` ([ADR 0007](decisions/0007-liner-report-integration.md)). Every `path`
+  is relative to the library root, `/`-separated, exactly as in the report.
+- `severity` is `"error" | "warning" | "info"` and `scope` is `"file" | "album" | "library"`.
+  `code` and error `kind` are open sets: show unknown values as they are. `message` is plain
+  text written by Liner, one line; render it as text, never as HTML.
+- **Order.** Issues are sorted by severity (error, warning, info), keeping the report's order
+  within a severity. `albums` holds only albums with at least one kept issue, ordered by their
+  worst severity, then by `id`. An issue goes under its `album_id`; issues without one go to
+  `libraryIssues`. An `album_id` that is not among the report's albums still gets an entry, with
+  `title` and `albumArtist` `null` and zero counts. `byCode` is sorted by count (highest
+  first), then code.
+- **Caps.** The first 500 issues in that order are kept; `issuesTotal` is the number in the
+  report and `issuesTruncated` says whether any were dropped. Each issue keeps its first 50
+  `paths`, and `pathsTotal` is the full number. The first 100 `errors` are kept (`errorsTotal`,
+  `errorsTruncated`). `summary` always describes the whole report.
+- `minSeverity` and `summary.issuesHidden` are the report's `--min-severity` filter and the
+  number of issues it removed, which Gargoyle cannot see either.
+
 **Event**
 ```json
 { "id": 812, "ts": 1794190042, "targetKind": "timer", "target": "music-sync.timer",
@@ -392,10 +460,11 @@ messages read `<reason> (<n> consecutive failure[s])`, e.g. `connection refused`
 ```
 `from` is `null` for a target's first observed state. `message` is `null` when healthy.
 System targets are `cpu`, `load`, `memory`, `swap`, `disk:<mount>` and `temp:<label>`; services and
-timers use the unit name. Transition rules (`core::health::Transitions`):
+timers use the unit name; the music library is `targetKind: "library"` with the target `library`. Transition rules (`core::health::Transitions`):
 
 - **Hold-down:** a new state is logged only after it has been observed on 2 consecutive
-  evaluations (system tick for system targets, unit tick for services and timers). A value
+  evaluations (system tick for system targets, unit tick for services and timers, library tick
+  for the library). A value
   flapping across a threshold every tick therefore logs nothing. **Checks have no hold-down:**
   their consecutive-failure rule (§8) already debounces, and a probe interval can be long, so a
   check's state is logged on the probe that first shows it (warning at failure 1, critical at
@@ -412,7 +481,10 @@ timers use the unit name. Transition rules (`core::health::Transitions`):
 **Nullable fields** (always present, may be `null`): `Event.{from,message}`,
 `ServiceSummary.{message,since,memory}`, `TimerSummary.{message,lastRun,nextRun}`,
 `TimerRun.{finishedAt,duration,result,exitStatus}` (a run in progress), `CheckSummary.{message,lastCheck,latencyMs}`,
-`SeriesInfo.label`, and point `avg/min/max`. Every other field is non-null.
+`SeriesInfo.label`, point `avg/min/max`, `Overview.library`,
+`LibrarySummary.{message,checkedAt,generatedAt,age,issueCounts,unreadableFiles,albums}`,
+`LibraryResponse.{library,report}` and `LibraryAlbum.{title,albumArtist}`. Every other field is
+non-null.
 
 **`GET /api/v1/metrics`**: returns
 `{ "host", "series": [ { "key": "disk.used:/", "metric": "disk.used", "label": "/", "unit": "percent" } ] }`.
@@ -438,7 +510,7 @@ Each point is `[ts, avg, min, max]`, and empty buckets are `null` so charts show
 `id`). Parameters, all optional and each at most once:
 
 - `since` (inclusive) and `until` (exclusive), unix seconds;
-- `kind`: one of `system`, `service`, `timer`, `check`;
+- `kind`: one of `system`, `service`, `timer`, `check`, `library`;
 - `target`: exact match, combinable with `kind`;
 - `limit`: default 100, clamped to 1–500.
 
@@ -538,6 +610,13 @@ latency_warning = "1s"
 name = "Game port"
 kind = "tcp"
 address = "127.0.0.1:25565"
+
+[library]                               # optional; absent = no library page, card or target
+report = "/var/lib/liner/report.json"   # required in the section: Liner JSON report to read
+name = "Music library"                  # display name
+max_age = "26h"                         # warn when the report's generated_at is older
+warn_on = "error"                       # "error" | "warning" | "info" | "never": lowest issue severity that warns
+interval = "60s"                        # how often the file is checked for changes
 ```
 
 Thresholds are global. The only per-target override is `disk_mounts`.
@@ -558,6 +637,9 @@ Validation rules:
 - Intervals must be at least `1s`. `raw_retention` must be at least `10m`, and not exceed
   `rollup_retention`.
 - `listen` must be loopback unless auth is configured or `allow_unauthenticated_remote = true`.
+- `library.report` must not be empty (a relative path is relative to the working directory,
+  like `storage.path`). `library.name` must not be empty or have leading or trailing spaces.
+  `library.max_age` must be at least `1m`, and `library.interval` at least `1s`.
 
 ## 8. Health model
 
@@ -572,6 +654,7 @@ worst of its parts in this order.
 | Service (`expect = any`) | not failed | — | failed | as above |
 | Timer | timer active and last run `Result=success` (or currently running: the result is not judged while running, but `max_age` still is) | timer not active (stopped/disabled); last success older than `max_age`; `NextElapse` > 10 min in the past | last run result ≠ success | never run; stale |
 | Check | success and latency < `latency_warning` | 1–2 consecutive failures; slow | ≥ 3 consecutive failures | not yet run; no probe completed within 3× interval |
+| Library (Liner report) | valid 1.x report, `generated_at` within `max_age`, no issue at or above `warn_on`, `errors[]` empty (or `warn_on = never`) | report older than `max_age`; any issue with severity ≥ `warn_on`; `errors[]` non-empty unless `warn_on = never` | **never** (metadata problems are not outages) | not read yet; file missing, unreadable, not a regular file, > 32 MiB or invalid; schema major ≠ 1; no poll completed within 3× interval |
 
 - **Windowed metrics.** CPU and load are evaluated on the mean over `window`. The values are kept in
   a small ring buffer in `State`, not queried from the DB. All other metrics are evaluated on the
@@ -579,8 +662,22 @@ worst of its parts in this order.
 - **Inactive timer services.** A timer's service being `inactive` is normal and never counts against
   it. Timer health uses only the `Result` of its last run.
 - **Overall status.** `system.health` is the worst of the system metrics. `overview.health` is the
-  worst of system, services, timers and checks. `counts` tallies every target, with the system
-  counted as one target.
+  worst of system, services, timers, checks and the library (when configured). `counts` tallies
+  every target, with the system counted as one target and the library as one.
+- **Library details.** Issue counts are Liner's `summary.issues_by_severity`; `warn_on = info`
+  warns on any issue, `never` only on age. A future `generated_at` counts as age 0. Messages
+  join the reasons with `; ` in the order age, issues, unreadable files:
+  - age: `report is <age> old (max <max_age>)`, age as whole minutes below 1h (`45m`), whole
+    hours below 48h (`27h`), else whole days (`3d`); `max_age` as in timer messages (`26h`);
+  - issues: every non-zero severity count, worst first, then the album count, e.g.
+    `4 errors, 7 warnings in 95 albums`, `1 error, 2 info in 1 album`;
+  - unreadable: `1 unreadable file`, `2 unreadable files`;
+  - unknown: `report not read yet`, `report not found`, `cannot read report: <io kind>`,
+    `report is not a regular file`, `report too large (<n> MiB, max 32 MiB)`,
+    `invalid report (line <l>, column <c>)`, `invalid report: <field>`,
+    `unsupported Liner schema <version>`, `no result for <n>s`.
+  A report filtered with `--min-severity` hides issues from health too; the UI shows
+  `issuesHidden`.
 - **Message.** Every non-healthy target carries a short human-readable `message` explaining why,
   such as `"disk / at 84% (warning ≥ 80%)"`.
 - **Implementation.** Health evaluation lives in `gargoyle-core::health` as pure functions that take
@@ -592,7 +689,8 @@ worst of its parts in this order.
 1. **Read-only by construction.** There are no mutating endpoints and no `POST` routes, and the
    router only registers GET handlers. Gargoyle never calls `systemctl` verbs other than `show` and
    never calls `journalctl` with anything except read flags. Neither the config nor the API can
-   cause command execution. Command arguments are fixed vectors and unit names are validated with a
+   cause command execution; the library report is a file Gargoyle reads, and Gargoyle never
+   runs Liner. Command arguments are fixed vectors and unit names are validated with a
    regex. `systemctl` gets the `--` separator before unit names; `journalctl` gets the unit as the
    single token `--unit=<name>`. Both keep a name from being read as an option.
 2. **Localhost by default.** The default listen address is `127.0.0.1:9077`. Binding a non-loopback
@@ -632,7 +730,9 @@ worst of its parts in this order.
      `scheme://host[:port]` when they have userinfo (§6); logs and the config's `Debug` output
      use the same function. URLs with ambiguous userinfo are rejected at load (§7). Probe failure reasons are built from the error
      kind, never from the client's error text, which contains the URL.
-   - Config values such as the password hash and paths are never serialized into the API.
+   - Config values such as the password hash and paths are never serialized into the API. This
+     includes `library.report`: library messages never name the file. Liner's absolute `root`
+     is not read from the report either; only root-relative paths are exposed (ADR 0007).
    - Error messages returned to clients are generic. Details go only to the log.
    - A response audit test (M5.4) crawls every endpoint, with and without credentials, against a
      config holding a password hash, a storage path and check URL credentials, and asserts none
@@ -676,6 +776,9 @@ worst of its parts in this order.
      their mode.
    - Reading the journal of system units requires the `systemd-journal` group. This is optional,
      and only journal backfill needs it.
+   - With `[library]`, the `gargoyle` user needs read access to the report file (and search
+     access to its directories). The unit's `ProtectSystem=strict` leaves `/var/lib` readable;
+     DEPLOYMENT.md puts the report in a world-readable `/var/lib/liner`.
    - The systemd unit (`packaging/gargoyle.service`) is hardened: `ProtectSystem=strict`,
      `ProtectHome=read-only` (so a separate `/home` partition stays visible to disk detection),
      `PrivateTmp`, `PrivateDevices`, `NoNewPrivileges`, `StateDirectory=gargoyle` with
@@ -712,7 +815,7 @@ The default is the local host, so the v1 contract remains backward compatible.
 
 | Layer | How |
 |---|---|
-| `gargoyle-core` | Unit tests for every health rule, the rate math (including counter wrap and reset after reboot), and config validation (valid and invalid examples). |
+| `gargoyle-core` | Unit tests for every health rule, the rate math (including counter wrap and reset after reboot), and config validation (valid and invalid examples). The Liner report parser is tested against Liner's golden report (copied into `crates/gargoyle-core/tests/fixtures/liner/`, origin noted there) and synthetic variants. |
 | Parsers (`gargoyle-collector`) | Pure parsers tested against fixture files in `crates/gargoyle-collector/tests/fixtures/`. Fixtures are captured from real Debian and Arch hosts. They cover missing hwmon, many cores, odd mount names with `\040`, and `systemctl show` output for running, failed, not-found and timer units. |
 | `LinuxCollector` | Integration test with `root` set to a fixture tree, and a fake `systemctl` script set via the `systemctl` path field. One `#[ignore]` smoke test runs against the real host (`make test-live`). |
 | Storage | Tests against a temp or in-memory DB covering migrations, inserts, rollup correctness, retention deletes, tier selection and bucketing. |

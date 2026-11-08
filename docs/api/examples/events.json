@@ -27,6 +27,15 @@
       "from": "healthy",
       "to": "warning",
       "message": "disk / at 84% (warning ≥ 80%)"
+    },
+    {
+      "id": 810,
+      "ts": 1794133000,
+      "targetKind": "library",
+      "target": "library",
+      "from": "healthy",
+      "to": "warning",
+      "message": "2 errors, 4 warnings, 1 info in 95 albums; 1 unreadable file"
     }
   ]
 }

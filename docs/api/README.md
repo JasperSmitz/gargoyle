@@ -21,6 +21,8 @@ These files are the **canonical** JSON shapes for `/api/v1`. The prose contract 
 | `GET /api/v1/metrics` | `examples/metrics.json` | `{ host, series: SeriesInfo[] }` |
 | `GET /api/v1/metrics/query` | `examples/metrics-query.json` | `MetricsQuery` |
 | `GET /api/v1/events` | `examples/events.json` | `{ host, events: Event[] }` |
+| `GET /api/v1/library` | `examples/library.json` | `LibraryResponse` (with `[library]`) |
+| `GET /api/v1/library` | `examples/library-unconfigured.json` | `LibraryResponse` (without `[library]`) |
 | any 4xx/5xx | `examples/error.json` | `ApiError` |
 
 ## Rules
@@ -35,13 +37,15 @@ These files are the **canonical** JSON shapes for `/api/v1`. The prose contract 
   - Events are returned newest first.
   - Runs are returned newest first.
   - Disks are returned in config order, or sorted by mount when auto-detected.
+  - Library issues are sorted by severity (error first), and albums by their worst issue, then
+    id (ARCHITECTURE §6).
 - `{unit}` and `{name}` path segments are percent-encoded by the client. An unknown unit or name
   returns `404` with an `ApiError`.
 - Error codes: `not_found` (404), `bad_request` (400), `unknown_series` (400, unknown exact metric
   key), `unavailable` (503, no history storage, or a request timeout),
   `unauthorized` (401, auth on and no valid credentials), `internal` (500).
 - `GET /api/v1/events` takes `since` (inclusive), `until` (exclusive), `kind`
-  (`system|service|timer|check`), `target` and `limit` (default 100, max 500). Pages hold whole
+  (`system|service|timer|check|library`), `target` and `limit` (default 100, max 500). Pages hold whole
   seconds only, so a page can be shorter or longer than `limit`. Page back with `until` = the
   oldest `ts` received, and stop on an **empty** page. See ARCHITECTURE §6.
 - Series units: `percent`, `load`, `bytes`, `bytes_per_s`, `celsius`, `ms`, `count`.

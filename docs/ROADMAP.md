@@ -23,6 +23,7 @@ the same change.
 | M4 Checks & health polish | ✅ Done (2026-11-08) |
 | M5 Security hardening | ✅ Done (2026-11-08) |
 | M6 Packaging & docs | ✅ Done, Debian install test pending (2026-11-08) |
+| M7 Music library report (Liner) | 🔵 Contract frozen (M7.0, 2026-11-08); M7.1–M7.5 open |
 
 ---
 
@@ -304,6 +305,141 @@ deployment.
 > warnings: no changelog, placeholder maintainer address). The unit's exposure score is 1.6. The
 > sandbox was exercised in a transient *user* unit with the real Linux collector: services, timers,
 > journal backfill and checks all worked. The real Debian install test is still open.
+
+---
+
+## M7 — Music library report (Liner)
+
+**Goal.** The dashboard shows the metadata health of the server's music library from the JSON
+report that Liner (a separate tool) writes. Gargoyle reads the file and never runs Liner.
+Design: [ADR 0007](decisions/0007-liner-report-integration.md). Contract: ARCHITECTURE §6
+(`GET /api/v1/library`, `LibrarySummary`, `overview.library`, `targetKind: "library"`), §7
+(`[library]`), §8 (library row and message formats), §9.4, and `docs/api/examples/`
+(`library.json`, `library-unconfigured.json`, and the updated `overview.json` and
+`events.json`).
+
+**Contract freeze.** M7.0 fixes the contract before any code exists, so backend and frontend
+work in parallel. Until M7.1 and M7.2 land, `make check` is **expected to be red** in exactly
+these places: the Rust contract test (new example files and fields, the `library` target kind),
+`crates/gargoyle-core/tests/config_reference.rs` (CONFIG.md documents `[library]`, which the
+config structs do not have yet), and until M7.3 the web contract fixtures. Developers must not
+change the contract to make them green. A needed change goes back to the coordinator.
+
+**Scope**
+
+- **M7.0** (architect, done) ADR 0007; the contract files listed above; CONFIG.md `[library]`;
+  DEPLOYMENT.md "Music library report (Liner)"; this section.
+- **M7.1** Backend, `gargoyle-core` (pure, no IO):
+  - Config: `LibraryConfig { report, name, max_age, warn_on, interval }` as
+    `Config.library: Option<_>`, with the defaults and validation of §7.
+    `config_reference.rs` passes against the new CONFIG.md rows and example.
+  - Liner input DTOs (subset, unknown fields ignored, `code`/`kind` as `String`,
+    `severity`/`scope` closed enums) and `parse_report(&str) -> Result<LinerReport,
+    ReportError>`: schema-major gate before the typed parse, RFC 3339 parser for
+    `generated_at` (hand-written, table-tested, no new crate), error values that carry no report
+    text (serde_json line and column only).
+  - The view builder `LinerReport -> LibraryReport`: grouping, ordering and caps
+    (500 issues, 50 paths per issue, 100 errors) per §6. `serde_json` becomes a normal
+    dependency of `gargoyle-core`.
+  - API DTOs `LibraryResponse`, `LibrarySummary`, `LibraryReport`, `ReportSummary`,
+    `SeverityCounts`, `CodeCount`, `LibraryAlbum`, `LibraryIssue`, `LibraryFileError`,
+    `LinerTool`, `Severity`, `IssueScope`, `WarnOn`; `Overview.library`;
+    `TargetKind::Library`. Contract test entries for both new example files.
+  - `health::library`: a pure evaluation returning `(Health, Option<String>)` from config, read
+    outcome and `now`, table-tested against every §8 rule and message format: not yet read, each
+    unknown cause, stale poll, age boundaries (exactly `max_age` is healthy), future
+    `generated_at`, each `warn_on` × severity combination, unreadable with and without `never`,
+    combined messages in order, singular and plural.
+  - Fixtures under `crates/gargoyle-core/tests/fixtures/liner/`: Liner's golden report
+    (`tests/golden/report.json` of the Liner repository, schema 1.0.0) unchanged, with a
+    `README.md` naming its origin and the Liner commit it was copied from; synthetic variants
+    (unknown fields, issue codes and error kinds; `1.7.0`; `2.0.0` with a different shape;
+    missing `schema_version`; bad `generated_at`; unknown `severity`; more than 500 issues and
+    50 paths for the caps). Nothing is copied from a real library report.
+- **M7.2** Backend, binary (after M7.1):
+  - Library reader task (`crates/gargoyle/src/library.rs` or similar), enabled only with
+    `[library]`: first poll 1s after start, then every `interval`; `stat` and change key
+    (device, inode, size, mtime, ctime); regular files only; 32 MiB cap checked from the
+    metadata and enforced on the read; IO errors retried every poll; the previous view dropped
+    after a failed read. All IO in `spawn_blocking`; a panic in it is a read failure, not a
+    crash. The path is logged at most once per distinct error, never put in a message.
+  - `State` holds the summary inputs and the prebuilt `LibraryReport`. Health is evaluated each
+    tick. Transitions go through `Transitions` (unit-tick hold-down) as target `library`, kind
+    `library`, and are restored from `events` at startup (storage maps `"library"` both ways;
+    no migration).
+  - `overview`: `library` summary, library in `health` and `counts`. `GET /api/v1/library`
+    (GET/HEAD only, `age` computed at response time). `/events?kind=library`.
+  - Tests: HTTP via `oneshot` for configured (valid, missing, invalid, `2.0.0` report) and
+    unconfigured; reader tests on a temp dir (change detection by rename, `chmod` fix picked up,
+    oversized file, a directory, a FIFO is not opened); a transition test (warning logged
+    once, restored after restart); the M5.4 response audit extended with a `[library]` whose
+    report path and a marker `root` value must appear in no response.
+  - `config/gargoyle.dev.toml` gets `[library]` pointing at a new synthetic
+    `config/liner-report.dev.json` (several albums, every severity, one library issue, one
+    unreadable file; `generated_at` in the past, so mock mode also shows the age warning), and
+    `config/gargoyle.example.toml` a commented-out `[library]` block.
+- **M7.3** Frontend (parallel with M7.1 and M7.2, against the example files):
+  - TS types for every new DTO, `Overview.library`, `TargetKind` `'library'`; fixtures for
+    `library.json` and `library-unconfigured.json` in `fixtures.ts`; `client.library()`.
+  - Route `#/library`, `targetHref('library', …)`, and an Events kind filter option. The nav
+    entry **Library** and the overview card appear only when `overview.library` is not `null`;
+    a direct visit to `#/library` without `[library]` shows an empty state pointing to
+    CONFIG.md `[library]`.
+  - Overview: a library card (name, health badge, message, error/warning/info counts,
+    unreadable files, report age as relative time, link to the page), and the library in the
+    "needs attention" list when not healthy.
+  - Library page (polls `/library` every 60s): header with name, health and message; summary
+    tiles (albums, audio files, unreadable files, errors, warnings, info); report age and
+    Liner version; a note when `issuesHidden > 0` or anything is truncated; a severity filter
+    (all / warning and up / errors only) kept in the URL query; albums as native
+    `<details>` elements, collapsed by default, with expand-all and collapse-all controls,
+    each summary showing title, album artist, id and per-severity counts; issues with a
+    severity chip (icon and text, never color alone), code, message as text and paths
+    (shown relative to the album id when they start with it, wrapping at 360px, "and N more"
+    from `pathsTotal`); library-scope issues and unreadable files as their own sections;
+    `report: null` shows the status message and no tables.
+  - Severity colors come from tokens in the single tokens file (error, warning and info chips
+    aliased to the health palette); no new npm packages.
+  - Tests: vitest for the grouping, filter and path helpers, page states (normal, filtered,
+    truncated, hidden issues, `report: null`, unconfigured, loading, offline), nav and card
+    visibility; the Library page and the overview with a library card added to
+    `a11y.test.ts` and the CSP test; `pnpm size` stays ≤ 150 KiB.
+- **M7.4** Docs and verification (after M7.2 and M7.3): README feature list and a mock-mode
+  screenshot of the Library page; DEPLOYMENT.md and CONFIG.md checked against the shipped
+  behavior (`check-config` with the documented `[library]`); the two Liner units in DEPLOYMENT.md
+  checked with `systemd-analyze verify` on copies in a scratch directory (nothing installed,
+  no `daemon-reload`); ACCESSIBILITY.md keyboard checklist gains the Library page; KNOWN_ISSUES
+  updated if anything is deferred.
+- **M7.5** Independent review of the whole milestone, including a security pass over the new
+  file-read path (size cap, file type, no path or `root` in responses, messages as text in the
+  UI).
+
+**Parallel.** M7.1 → M7.2 (backend developer) ∥ M7.3 (frontend developer), then M7.4, then
+M7.5. The frontend develops against the example JSON first and against `make dev` once M7.2
+lands.
+
+**Acceptance**
+
+- [ ] Without `[library]`, nothing changes: no library in the overview (`library: null`,
+      counts unchanged), no nav entry, `/api/v1/library` answers `configured: false`, and no
+      file is read.
+- [ ] `make dev` shows the Library nav entry, the overview card and the page with grouped,
+      filterable, collapsible issues from `config/liner-report.dev.json`.
+- [ ] Liner's golden report parses; a `1.7.0` report with unknown fields and codes parses; a
+      `2.0.0` report is `unknown` with `unsupported Liner schema 2.0.0`.
+- [ ] Health is never `critical` (property or table test over all inputs), and every §8 library
+      rule and message format has a test row.
+- [ ] Replacing the report file (rename) is picked up within one `interval`; an unchanged file
+      is not parsed again (test via a parse counter or equivalent); a deleted file turns the
+      library `unknown` with `report not found` after the hold-down.
+- [ ] A report over 32 MiB is refused without being read into memory.
+- [ ] A library health change appears in `/events` and on the Events page with kind `library`,
+      once, and is not logged again after a restart.
+- [ ] Neither the configured report path nor the report's `root` appears in any API response
+      (audit test).
+- [ ] The Library page works at 360px without horizontal scroll and passes the automated a11y
+      and CSP tests; the bundle stays ≤ 150 KiB gzipped.
+- [ ] `make check` is green.
 
 ---
 
