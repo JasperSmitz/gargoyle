@@ -11,12 +11,14 @@ use serde::{Deserialize, Serialize};
 use crate::api::HealthCounts;
 use crate::config::Levels;
 
+mod check;
 mod service;
 mod system;
 mod timer;
 mod transitions;
 mod window;
 
+pub use check::{CRITICAL_FAILURES, CheckTracker, ProbeOutcome, evaluate_check};
 pub use service::{RESTART_WINDOW_S, RestartTracker, evaluate_service};
 pub use system::{
     SystemHealth, disk_used_pct, evaluate_system, load_per_core, memory_used_pct, swap_used_pct,

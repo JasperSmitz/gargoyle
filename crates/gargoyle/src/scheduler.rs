@@ -1,9 +1,10 @@
-//! Periodic work (ARCHITECTURE §3): the system tick, the unit tick and the maintenance tick, plus
-//! the one-off startup work: restoring state from storage and journal backfill.
+//! Periodic work (ARCHITECTURE §3): the system tick, the unit tick, one tick per check and the
+//! maintenance tick, plus the one-off startup work: restoring state from storage and journal
+//! backfill.
 //!
-//! After each system or unit tick, the targets it covers are judged and every health transition
-//! is stored as an event (see `gargoyle_core::health::Transitions` for the rules). The unit tick
-//! also stores new and finished timer runs.
+//! After each system, unit or check tick, the targets it covers are judged and every health
+//! transition is stored as an event (see `gargoyle_core::health::Transitions` for the rules). The
+//! unit tick also stores new and finished timer runs.
 //!
 //! Collector calls block (they read `/proc` or spawn `systemctl`), so each runs in
 //! `spawn_blocking`. A failed collection is logged and recorded; it never stops the loop.
@@ -16,18 +17,20 @@
 //! dashboard keeps working on a full or broken disk; only history is lost.
 
 use std::fmt;
+use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gargoyle_collector::{CollectError, Collector};
 use gargoyle_core::api::RunSource;
-use gargoyle_core::config::Config;
-use gargoyle_core::health::Transition;
+use gargoyle_core::config::{CheckConfig, Config};
+use gargoyle_core::health::{ProbeOutcome, Transition};
 use gargoyle_core::model::{TimerRunRecord, UnitRequest};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
+use crate::checks::Prober;
 use crate::state::State;
 use crate::storage::{Sample, Storage, samples};
 
@@ -117,9 +120,10 @@ pub async fn restore(shared: &Shared) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Starts the system, unit and (with storage) maintenance loops. Each ticks immediately, then
-/// every interval; the immediate maintenance tick catches up on rollups missed while stopped.
-pub fn spawn(shared: &Shared) -> Vec<JoinHandle<()>> {
+/// Starts the system, unit, check and (with storage) maintenance loops. The system, unit and
+/// maintenance loops tick immediately, then every interval; the immediate maintenance tick catches
+/// up on rollups missed while stopped. Each check starts after its own [`check_jitter`].
+pub fn spawn(shared: &Shared) -> anyhow::Result<Vec<JoinHandle<()>>> {
     let c = &shared.config.collector;
     let mut loops = vec![
         spawn_loop(shared.clone(), c.system_interval, system_tick),
@@ -132,7 +136,64 @@ pub fn spawn(shared: &Shared) -> Vec<JoinHandle<()>> {
             maintenance_tick,
         ));
     }
-    loops
+    if !shared.config.checks.is_empty() {
+        let prober = Prober::new()?;
+        for index in 0..shared.config.checks.len() {
+            loops.push(spawn_check_loop(shared.clone(), prober.clone(), index));
+        }
+    }
+    Ok(loops)
+}
+
+/// The longest a check waits before its first probe, beyond [`CHECK_MIN_DELAY`].
+const CHECK_MAX_JITTER: Duration = Duration::from_secs(10);
+/// Every check waits at least this long, so a check of Gargoyle's own API does not race the HTTP
+/// server binding its port.
+const CHECK_MIN_DELAY: Duration = Duration::from_secs(1);
+
+/// A random delay before a check's first probe, so checks with the same interval do not all fire
+/// in the same instant: [`CHECK_MIN_DELAY`] plus up to `min(interval, CHECK_MAX_JITTER)`.
+fn check_jitter(interval: Duration) -> Duration {
+    let span = u64::try_from(interval.min(CHECK_MAX_JITTER).as_millis()).unwrap_or(u64::MAX);
+    // A freshly keyed `RandomState` is a random source from std, which is all this needs.
+    let random = RandomState::new().hash_one(0u8);
+    CHECK_MIN_DELAY + Duration::from_millis(random % span.max(1))
+}
+
+fn spawn_check_loop(shared: Shared, prober: Prober, index: usize) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let Some(cfg) = shared.config.checks.get(index).cloned() else {
+            return;
+        };
+        let start = tokio::time::Instant::now() + check_jitter(cfg.interval);
+        let mut interval = tokio::time::interval_at(start, cfg.interval);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            check_tick(&shared, &prober, &cfg).await;
+        }
+    })
+}
+
+/// One probe of one check. The probe is bounded by the check's timeout, which config validation
+/// keeps within its interval, so probes of one check never overlap.
+pub async fn check_tick(shared: &Shared, prober: &Prober, cfg: &CheckConfig) {
+    let outcome = prober.probe(cfg).await;
+    let ts = now();
+    if let ProbeOutcome::Failure { reason, .. } = &outcome {
+        // The target is shown sanitized; the raw URL is never logged.
+        tracing::debug!(check = %cfg.name, target = %cfg.display_target(), %reason, "check failed");
+    }
+    let sample = outcome
+        .latency_ms()
+        .and_then(|ms| samples::check(ts, &cfg.name, ms));
+    let events = shared.write(|s| {
+        s.record_check(&cfg.name, ts, outcome);
+        let target = s.check_target(cfg, ts);
+        s.transitions(vec![target])
+    });
+    store(shared, sample.into_iter().collect()).await;
+    store_events(shared, ts, events).await;
 }
 
 fn spawn_loop<F, Fut>(shared: Shared, every: Duration, tick: F) -> JoinHandle<()>
@@ -180,9 +241,12 @@ pub async fn system_tick(shared: Shared) {
             });
             store(&shared, samples).await;
         }
-        // Not stored: the system summary has no message, and it turns `unknown` once its last
-        // sample is stale.
-        Err(e) => tracing::warn!(error = %e, "system collection failed"),
+        // The system summary has no message; the error reaches the messages of system events
+        // once the last good sample is stale.
+        Err(e) => {
+            tracing::warn!(error = %e, "system collection failed");
+            shared.write(|s| s.record_system_error(e.to_string()));
+        }
     }
     let now = now();
     let events = shared.write(|s| {
@@ -463,6 +527,7 @@ mod tests {
     use gargoyle_core::model::{HostInfo, SystemSnapshot, UnitSnapshot};
 
     use super::*;
+    use crate::checks::Prober;
     use crate::storage::Storage;
 
     fn config() -> Config {
@@ -642,7 +707,7 @@ mod tests {
     #[tokio::test]
     async fn spawned_loops_tick_immediately() {
         let shared = Shared::new(config(), Arc::new(MockCollector::new(1)));
-        let handles = spawn(&shared);
+        let handles = spawn(&shared).unwrap();
         for _ in 0..200 {
             if shared.read(|s| s.has_host_info()) {
                 break;
@@ -1163,5 +1228,220 @@ mod tests {
             )
         );
         assert_eq!(stored_runs(&dir)[0].4, "journal");
+    }
+
+    /// A fake `systemctl show` that answers for every requested unit until the file `fail`
+    /// exists next to it, then exits 1 like systemctl without a bus.
+    fn fake_systemctl(dir: &std::path::Path, run_start: i64) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            r#"#!/bin/sh
+if [ -e '{flag}' ]; then
+    echo 'Failed to connect to bus: No such file or directory' >&2
+    exit 1
+fi
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+shift
+first=1
+for unit in "$@"; do
+    [ "$first" = 1 ] || echo
+    first=0
+    case "$unit" in
+    *.timer) printf 'Id=%s\nLoadState=loaded\nActiveState=active\nSubState=waiting\nUnit=sync-job.service\nNextElapseUSecRealtime=@{next}\n' "$unit" ;;
+    sync-job.service) printf 'Id=%s\nLoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainStartTimestamp=@{start}\nExecMainExitTimestamp=@{end}\nExecMainStatus=0\nInvocationID=abc\n' "$unit" ;;
+    *) printf 'Id=%s\nLoadState=loaded\nActiveState=active\nSubState=running\nNRestarts=0\n' "$unit" ;;
+    esac
+done
+"#,
+            flag = dir.join("fail").display(),
+            next = run_start + 7200,
+            start = run_start,
+            end = run_start + 5,
+        );
+        let path = dir.join("systemctl");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// ROADMAP M4 acceptance: when `systemctl` starts failing, services and timers turn
+    /// `unknown` with the collection error as their message within 3 unit intervals, and that is
+    /// logged as an event.
+    #[tokio::test]
+    async fn failing_systemctl_turns_units_unknown_within_three_intervals() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::from_toml_str(
+            "[collector]\nunits_interval = \"1s\"\njournal_backfill = false\n\
+             [[service]]\nunit = \"web.service\"\n\
+             [[timer]]\nunit = \"sync.timer\"\nservice = \"sync-job.service\"\n",
+        )
+        .expect("valid");
+        config.storage.path = dir.path().join("g.db");
+        let collector = gargoyle_collector::LinuxCollector {
+            root: dir.path().to_owned(),
+            systemctl: fake_systemctl(dir.path(), now() - 600),
+            journalctl: dir.path().join("no-journalctl"),
+            system: config.system.clone(),
+        };
+        let storage = Storage::open(&config.storage).unwrap();
+        let shared = Shared::new(config, Arc::new(collector)).with_storage(storage);
+        let health_at = |at: i64| {
+            shared.read(|s| {
+                let services = s.services_view(&shared.config, at);
+                let timers = s.timers_view(&shared.config, at);
+                [
+                    (services[0].health, services[0].message.clone()),
+                    (timers[0].health, timers[0].message.clone()),
+                ]
+            })
+        };
+
+        // The good tick happens between `before` and `t0`, whatever second boundaries it spans.
+        let before = now();
+        unit_tick(shared.clone()).await;
+        let t0 = now();
+        let healthy = [(Health::Healthy, None), (Health::Healthy, None)];
+        assert_eq!(health_at(t0), healthy);
+
+        std::fs::write(dir.path().join("fail"), "").unwrap();
+        unit_tick(shared.clone()).await;
+        // The last good data still counts within 3 intervals...
+        assert_eq!(health_at(before + 3), healthy);
+        // ...and not after.
+        let after = health_at(t0 + 4);
+        for (health, message) in &after {
+            assert_eq!(*health, Health::Unknown, "{after:?}");
+            let message = message.as_deref().unwrap_or_default();
+            assert!(
+                message.starts_with("collection failed: systemctl")
+                    && message.contains("Failed to connect to bus"),
+                "{message}"
+            );
+        }
+
+        // Transitions as the unit ticks at those times would see them (held down for 2).
+        let evaluate = || {
+            shared.write(|s| {
+                let targets = s.unit_targets(&shared.config, t0 + 4);
+                s.transitions(targets)
+            })
+        };
+        assert!(evaluate().is_empty(), "held down");
+        let events = evaluate();
+        let mut seen: Vec<_> = events
+            .iter()
+            .map(|e| (e.target.as_str(), e.from, e.to))
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                ("sync.timer", Some(Health::Healthy), Health::Unknown),
+                ("web.service", Some(Health::Healthy), Health::Unknown)
+            ]
+        );
+        assert!(events.iter().all(|e| e.message == after[0].1));
+    }
+
+    #[tokio::test]
+    async fn system_collection_errors_reach_system_event_messages() {
+        let shared = Shared::new(config(), Arc::new(MockCollector::new(1)));
+        system_tick(shared.clone()).await;
+        shared.write(|s| s.record_system_error("cannot read /proc/stat: gone".into()));
+        let targets = shared.read(|s| s.system_targets(&shared.config, now() + 31));
+        assert!(!targets.is_empty());
+        for (_, target, a) in targets {
+            assert_eq!(a.health, Health::Unknown, "{target}");
+            assert_eq!(
+                a.message.as_deref(),
+                Some("collection failed: cannot read /proc/stat: gone"),
+                "{target}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn failing_system_tick_records_the_error() {
+        let shared = Shared::new(config(), Arc::new(NoHostInfo(MockCollector::new(1))));
+        system_tick(shared.clone()).await;
+        let broken = Shared {
+            collector: Arc::new(Broken),
+            ..shared.clone()
+        };
+        system_tick(broken).await;
+        let targets = shared.read(|s| s.system_targets(&shared.config, now() + 31));
+        assert!(targets.iter().all(|(_, _, a)| {
+            a.message.as_deref() == Some("collection failed: systemctl failed: boom")
+        }));
+        // A good sample clears it.
+        system_tick(shared.clone()).await;
+        let targets = shared.read(|s| s.system_targets(&shared.config, now() + 31));
+        assert!(targets.iter().all(|(_, _, a)| {
+            a.message
+                .as_deref()
+                .is_some_and(|m| m.starts_with("no data for"))
+        }));
+    }
+
+    /// Reviewer's scenario: a check goes critical, Gargoyle restarts while the target is still
+    /// down. The restart must log nothing, and the check must stay critical from its first probe.
+    #[tokio::test]
+    async fn restart_of_a_failing_check_logs_nothing_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let closed = crate::checks::tests::closed_port().await;
+        let start = || async {
+            let mut config = Config::from_toml_str(&format!(
+                "[collector]\nmode = \"mock\"\njournal_backfill = false\n\
+                 [[check]]\nname = \"Game port\"\nkind = \"tcp\"\naddress = \"{closed}\"\n"
+            ))
+            .unwrap();
+            config.storage.path = dir.path().join("g.db");
+            let storage = Storage::open(&config.storage).unwrap();
+            let shared = Shared::new(config, Arc::new(MockCollector::new(1))).with_storage(storage);
+            restore(&shared).await.unwrap();
+            shared
+        };
+        let prober = Prober::new().unwrap();
+        let probe = |shared: Shared| {
+            let prober = prober.clone();
+            async move {
+                let cfg = shared.config.checks[0].clone();
+                check_tick(&shared, &prober, &cfg).await;
+                shared.read(|s| s.checks_view(&shared.config, now())[0].clone())
+            }
+        };
+        let critical = vec![
+            ("Game port".to_owned(), None, "warning".to_owned()),
+            (
+                "Game port".to_owned(),
+                Some("warning".to_owned()),
+                "critical".to_owned(),
+            ),
+        ];
+
+        let shared = start().await;
+        for _ in 0..3 {
+            probe(shared.clone()).await;
+        }
+        // No hold-down for checks: warning at failure 1, critical at failure 3.
+        assert_eq!(stored_events(&dir), critical);
+
+        drop(shared);
+        let shared = start().await;
+        let before = shared.read(|s| s.checks_view(&shared.config, now())[0].clone());
+        assert_eq!(
+            (before.health, before.consecutive_failures),
+            (Health::Unknown, 0),
+            "not yet run in this process"
+        );
+        for _ in 0..4 {
+            let c = probe(shared.clone()).await;
+            assert_eq!(c.health, Health::Critical, "{c:?}");
+        }
+        assert_eq!(
+            stored_events(&dir),
+            critical,
+            "nothing new after the restart"
+        );
     }
 }

@@ -22,7 +22,7 @@ const RAW_MAX_RANGE_S: i64 = 6 * 3600;
 /// somewhat ahead still works.
 const MAX_FUTURE_S: i64 = 86_400;
 const MAX_RANGE_S: i64 = 10 * 366 * 86_400;
-/// Default check interval (§7), until M4 stores check latency.
+/// Default check interval (§7), for the stored latency of a check no longer in the config.
 const DEFAULT_CHECK_INTERVAL_S: i64 = 60;
 
 /// A caller error, answered with 400.

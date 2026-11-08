@@ -4,7 +4,9 @@
 //! - **Hold-down:** a new state is logged only once it has been observed on
 //!   [`CONFIRMATIONS`] consecutive evaluations, so a value hovering at a threshold does not log an
 //!   event every tick. The event carries the time and message of the confirming observation. Live
-//!   health in the API is not affected.
+//!   health in the API is not affected. Checks are exempt: their consecutive-failure rule is
+//!   already a debounce, and a probe interval can be long (an hour), so every check state is
+//!   logged when first observed.
 //! - A confirmed change from the last logged state is a transition.
 //! - The first known state of a target is a transition (`from = null`) only if it is not healthy:
 //!   a fresh install should not log one "healthy" event per target, but a target that is already
@@ -34,8 +36,15 @@ pub struct Transition {
     pub message: Option<String>,
 }
 
-/// Consecutive observations of a new state needed before it is logged.
+/// Consecutive observations of a new state needed before it is logged, except for checks.
 pub const CONFIRMATIONS: u32 = 2;
+
+fn confirmations(kind: TargetKind) -> u32 {
+    match kind {
+        TargetKind::Check => 1,
+        TargetKind::System | TargetKind::Service | TargetKind::Timer => CONFIRMATIONS,
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Entry {
@@ -90,7 +99,7 @@ impl Transitions {
             Some((h, n)) if h == now.health => n + 1,
             _ => 1,
         };
-        if seen < CONFIRMATIONS {
+        if seen < confirmations(kind) {
             entry.pending = Some((now.health, seen));
             return None;
         }
@@ -221,6 +230,24 @@ mod tests {
         assert_eq!(obs(&mut t, Assessment::healthy()), None);
         let back = obs(&mut t, Assessment::healthy()).expect("confirmed");
         assert_eq!((back.from, back.message), (Some(Critical), None));
+    }
+
+    #[test]
+    fn checks_are_not_held_down() {
+        let mut t = Transitions::default();
+        let mut obs = |h| {
+            t.observe(TargetKind::Check, "web", &a(h))
+                .map(|tr| (tr.from, tr.to))
+        };
+        assert_eq!(obs(Healthy), None);
+        assert_eq!(obs(Warning), Some((Some(Healthy), Warning)));
+        assert_eq!(obs(Warning), None);
+        assert_eq!(obs(Critical), Some((Some(Warning), Critical)));
+        assert_eq!(obs(Healthy), Some((Some(Critical), Healthy)));
+        // Unknown is still never a first state.
+        let mut t = Transitions::default();
+        assert_eq!(t.observe(TargetKind::Check, "new", &a(Unknown)), None);
+        assert!(t.observe(TargetKind::Check, "new", &a(Warning)).is_some());
     }
 
     #[test]

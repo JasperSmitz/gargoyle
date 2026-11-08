@@ -217,12 +217,11 @@ impl Config {
                 CheckKind::Http => {
                     match &c.url {
                         None => v.err(at("url"), "required for kind = \"http\""),
-                        Some(url)
-                            if !(url.starts_with("http://") || url.starts_with("https://")) =>
-                        {
-                            v.err(at("url"), "must start with http:// or https://")
+                        Some(url) => {
+                            if let Some(problem) = target::url_problem(url) {
+                                v.err(at("url"), problem);
+                            }
                         }
-                        Some(_) => {}
                     }
                     if c.address.is_some() {
                         v.err(at("address"), "only valid for kind = \"tcp\"");
@@ -321,9 +320,15 @@ pub fn is_valid_unit_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | '.' | '@' | '-'))
 }
 
+/// `host:port`. The host may not contain `@`, `/` or whitespace: an address is echoed in the API
+/// as is, so it must not be able to carry URL-style credentials.
 fn is_host_port(addr: &str) -> bool {
     match addr.rsplit_once(':') {
-        Some((host, port)) => !host.is_empty() && port.parse::<u16>().is_ok_and(|p| p != 0),
+        Some((host, port)) => {
+            !host.is_empty()
+                && !host.contains(|c: char| c == '@' || c == '/' || c.is_whitespace())
+                && port.parse::<u16>().is_ok_and(|p| p != 0)
+        }
         None => false,
     }
 }
@@ -688,7 +693,9 @@ pub enum CheckKind {
     Tcp,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+/// `Debug` is written by hand so that the URL shows sanitized, like the password hash shows
+/// redacted: a stray `{config:?}` in a log line must not leak check credentials.
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckConfig {
     pub name: String,
@@ -708,6 +715,42 @@ pub struct CheckConfig {
     pub latency_warning: Option<Duration>,
 }
 
+impl CheckConfig {
+    /// The configured URL or address as the API and logs show it (§6): a URL without query
+    /// string and fragment, and only `scheme://host[:port]` if it has userinfo. Never use the raw
+    /// `url` for display.
+    pub fn display_target(&self) -> String {
+        match self.kind {
+            CheckKind::Http => self
+                .url
+                .as_deref()
+                .map_or_else(String::new, target::display_url),
+            CheckKind::Tcp => self
+                .address
+                .as_deref()
+                .map_or_else(String::new, target::display_address),
+        }
+    }
+}
+
+impl fmt::Debug for CheckConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckConfig")
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("url", &self.url.as_deref().map(target::display_url))
+            .field(
+                "address",
+                &self.address.as_deref().map(target::display_address),
+            )
+            .field("expect_status", &self.expect_status)
+            .field("interval", &self.interval)
+            .field("timeout", &self.timeout)
+            .field("latency_warning", &self.latency_warning)
+            .finish()
+    }
+}
+
 fn default_check_interval() -> Duration {
     Duration::from_secs(60)
 }
@@ -715,6 +758,8 @@ fn default_check_interval() -> Duration {
 fn default_check_timeout() -> Duration {
     Duration::from_secs(5)
 }
+
+mod target;
 
 #[cfg(test)]
 mod tests;

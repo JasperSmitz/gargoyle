@@ -13,6 +13,7 @@ pub const BYTES_PER_S: &str = "bytes_per_s";
 pub const CELSIUS: &str = "celsius";
 pub const BYTES: &str = "bytes";
 pub const COUNT: &str = "count";
+pub const MS: &str = "ms";
 
 /// One value of one series at one moment.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +86,16 @@ pub fn services(ts: i64, units: &[UnitSnapshot], is_service: impl Fn(&str) -> bo
             memory.into_iter().chain(restarts)
         })
         .collect()
+}
+
+/// The latency of one check probe, if it is a number worth storing.
+pub fn check(ts: i64, name: &str, latency_ms: f64) -> Option<Sample> {
+    latency_ms.is_finite().then(|| Sample {
+        key: format!("check.latency:{name}"),
+        unit: MS,
+        ts,
+        value: latency_ms,
+    })
 }
 
 #[cfg(test)]
@@ -160,5 +171,15 @@ mod tests {
         );
         assert!(s.iter().all(|s| s.ts == 5_000));
         assert!(services(5_000, &units, |_| false).is_empty());
+    }
+
+    #[test]
+    fn check_latency_series() {
+        let s = check(7, "Music HTTP", 3.1).expect("finite");
+        assert_eq!(
+            (s.key.as_str(), s.unit, s.ts, s.value),
+            ("check.latency:Music HTTP", MS, 7, 3.1)
+        );
+        assert_eq!(check(7, "x", f64::NAN), None);
     }
 }

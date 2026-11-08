@@ -1,5 +1,6 @@
 //! The `gargoyle` binary: CLI, scheduler, storage and HTTP server.
 
+mod checks;
 mod http;
 mod scheduler;
 mod state;
@@ -120,7 +121,7 @@ fn run(path: &Path) -> anyhow::Result<()> {
                 "cannot restore state from the database"
             );
         }
-        let loops = scheduler::spawn(&shared);
+        let loops = scheduler::spawn(&shared)?;
         let result = http::serve(listen, shared).await;
         // No new ticks during shutdown, also when binding failed.
         for task in &loops {
