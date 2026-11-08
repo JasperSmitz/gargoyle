@@ -213,10 +213,22 @@ fn unit_name_rule() {
         ("foo;rm.service", false),
         ("foo/bar.service", false),
         ("", false),
+        ("@.service", false),
+        ("@foo.service", false),
+        ("foo@.service", false),
+        ("foo@bar@.service", false),
+        ("foo@bar@baz.service", true),
     ];
     for (name, ok) in cases {
         assert_eq!(is_valid_unit_name(name), ok, "{name:?}");
     }
+
+    // Length limit: 255 characters in total, suffix included.
+    let longest = format!("{}.service", "a".repeat(255 - ".service".len()));
+    assert_eq!(longest.len(), 255);
+    assert!(is_valid_unit_name(&longest));
+    let too_long = format!("a{longest}");
+    assert!(!is_valid_unit_name(&too_long));
 }
 
 #[test]

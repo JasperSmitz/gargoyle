@@ -5,7 +5,10 @@
 //! code can use them without this crate; they are re-exported here for convenience.
 
 pub mod linux;
+mod mock;
+
 pub use linux::LinuxCollector;
+pub use mock::MockCollector;
 
 pub use gargoyle_core::model::{
     CollectError, CpuCounters, CpuTimes, DiskUsage, HostInfo, MemoryInfo, NetCounters,

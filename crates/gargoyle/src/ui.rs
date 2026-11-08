@@ -70,11 +70,11 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::http::router;
+    use crate::http::mock_router;
 
     async fn get(uri: &str) -> Response {
         let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
-        router().oneshot(req).await.unwrap()
+        mock_router().oneshot(req).await.unwrap()
     }
 
     #[tokio::test]

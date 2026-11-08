@@ -1,15 +1,20 @@
-//! The `gargoyle` binary: CLI, HTTP server and (in later milestones) scheduler and storage.
+//! The `gargoyle` binary: CLI, scheduler, HTTP server and (in later milestones) storage.
 
 mod http;
+mod scheduler;
+mod state;
 mod ui;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use gargoyle_core::config::{AuthMode, Config};
+use gargoyle_collector::{Collector, LinuxCollector, MockCollector};
+use gargoyle_core::config::{AuthMode, CollectorMode, Config};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -97,6 +102,32 @@ fn run(path: &Path) -> anyhow::Result<()> {
         );
     }
 
+    let collector = build_collector(&config)?;
     let runtime = tokio::runtime::Runtime::new().context("cannot start async runtime")?;
-    runtime.block_on(http::serve(listen))
+    let result = runtime.block_on(async {
+        let shared = scheduler::Shared::new(config, collector);
+        let loops = scheduler::spawn(&shared);
+        let result = http::serve(listen, shared).await;
+        // No new ticks during shutdown, also when binding failed.
+        for task in &loops {
+            task.abort();
+        }
+        result
+    });
+    // Dropping the runtime would wait forever for a collector call that hung (stuck D-Bus, dead
+    // NFS mount) and was left running on the blocking pool; give such calls 2s, then exit.
+    runtime.shutdown_timeout(SHUTDOWN_GRACE);
+    result
+}
+
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// Fixed so `make dev` shows the same demo every run.
+const MOCK_SEED: u64 = 0x6761_7267;
+
+fn build_collector(config: &Config) -> anyhow::Result<Arc<dyn Collector>> {
+    match config.collector.mode {
+        CollectorMode::Mock => Ok(Arc::new(MockCollector::new(MOCK_SEED))),
+        CollectorMode::Linux => Ok(Arc::new(LinuxCollector::new(config.system.clone()))),
+    }
 }
