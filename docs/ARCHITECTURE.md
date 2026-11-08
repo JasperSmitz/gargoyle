@@ -208,7 +208,16 @@ CREATE TABLE timer_runs (id INTEGER PRIMARY KEY, host_id INTEGER NOT NULL, timer
                       source TEXT NOT NULL,           -- observed|journal
                       UNIQUE(host_id, service, started_at));
 CREATE INDEX timer_runs_ts ON timer_runs(host_id, timer, started_at);
+CREATE UNIQUE INDEX timer_runs_invocation ON timer_runs(host_id, service, invocation_id)
+                      WHERE invocation_id IS NOT NULL;                 -- migration 2
 ```
+
+A timer run is matched to an existing row by `(service, invocation_id)` first, then by
+`(service, started_at)`, because the journal and systemd can disagree on a start by about a second.
+A match only fills in missing values (a run in progress that finished), so the first source and
+start time are kept and re-inserting after a restart or backfill is a no-op. Journal backfill runs
+once after the first successful unit tick (which resolves each timer's `Unit=`), starting from the
+newest run stored before startup, or 30 days back.
 
 **Series keys** use the format `<metric>[:<label>]`. Each key has a fixed unit string:
 
@@ -219,6 +228,7 @@ CREATE INDEX timer_runs_ts ON timer_runs(host_id, timer, started_at);
 | `load.1` / `load.5` / `load.15` | `load` | `temp:<label>` | `celsius` |
 | `mem.used` | `percent` | `service.memory:<unit>` | `bytes` |
 | `swap.used` | `percent` | `check.latency:<name>` | `ms` |
+| | | `service.restarts:<unit>` | `count` |
 
 **Retention and downsampling** (configurable):
 
@@ -239,7 +249,7 @@ Query details:
 
 - The grid is anchored at `from` (`from + i·step`), and `to` is inclusive.
 - The step is never finer than the native interval of the slowest queried series:
-  `system_interval` by default, `units_interval` for `service.memory:*`, and the check interval
+  `system_interval` by default, `units_interval` for `service.memory:*` and `service.restarts:*`, and the check interval
   for `check.latency:*`. On the 5m tier the step is a multiple of 300.
 - 5m-tier queries union in the raw rows newer than the last rollup, so the right edge of a chart
   is never empty.
@@ -267,7 +277,8 @@ The API rules apply to every endpoint:
 - All timestamps are **unix seconds** (integers). Durations are seconds. Sizes are bytes.
 - Health is one of `"healthy" | "warning" | "critical" | "unknown"`.
 - Errors use `{ "error": { "code": "not_found", "message": "..." } }` with the matching 4xx/5xx
-  status.
+  status. Codes: `not_found` (404), `bad_request` (400), `unknown_series` (400, an exact metric
+  key with no stored series), `unavailable` (503, no history storage), `internal` (500).
 - Every top-level response includes `"host": "<hostname>"`. This is reserved for multi-host (§10).
 - Optional fields are always present as `null`, never omitted.
 - List endpoints wrap their items in an object: `{ "host", "<items>": [...] }`.
@@ -352,6 +363,20 @@ stripped.
   "from": "healthy", "to": "critical", "message": "last run failed: exit-code (status 1)" }
 ```
 `from` is `null` for a target's first observed state. `message` is `null` when healthy.
+System targets are `cpu`, `load`, `memory`, `swap`, `disk:<mount>` and `temp:<label>`; services and
+timers use the unit name. Transition rules (`core::health::Transitions`):
+
+- **Hold-down:** a new state is logged only after it has been observed on 2 consecutive
+  evaluations (system tick for system targets, unit tick for services and timers). A value
+  flapping across a threshold every tick therefore logs nothing. The event's `ts` and `message` are
+  from the confirming evaluation. Live health in every other endpoint is not delayed.
+- A target's first state is logged (with `from: null`) only if it is not healthy, and `unknown` is
+  never a first state (CPU is unknown for one tick after every start).
+- At startup the last logged state of each target is restored from `events`, so a restart does not
+  log an unchanged state again. Until a target has been observed live, `unknown` does not count
+  against that restored state.
+- A target that disappears (an unmounted auto-detected disk, a removed sensor, a unit removed from
+  config) is no longer evaluated, so its last event stays its final word; nothing marks it gone.
 
 **Nullable fields** (always present, may be `null`): `Event.{from,message}`,
 `ServiceSummary.{message,since,memory}`, `TimerSummary.{message,lastRun,nextRun}`,
@@ -375,9 +400,31 @@ stripped.
                 "points": [ [1794196400, 10.2, 8.0, 14.1], [1794196412, null, null, null] ] } ] }
 ```
 Each point is `[ts, avg, min, max]`, and empty buckets are `null` so charts show gaps. The
-`resolution` field is either `"raw"` or `"5m"`. An unknown key returns `400`.
+`resolution` field is either `"raw"` or `"5m"`. An unknown exact key returns `400` with code
+`unknown_series`; other invalid parameters return `400` with `bad_request`.
 
-**`GET /api/v1/events`** returns `{ "host", "events": [Event] }`.
+**`GET /api/v1/events`** returns `{ "host", "events": [Event] }`, newest first (by `ts`, then
+`id`). Parameters, all optional and each at most once:
+
+- `since` (inclusive) and `until` (exclusive), unix seconds;
+- `kind`: one of `system`, `service`, `timer`, `check`;
+- `target`: exact match, combinable with `kind`;
+- `limit`: default 100, clamped to 1–500.
+
+A malformed, unknown-valued or repeated parameter returns 400 `bad_request`; unknown parameter
+names are ignored.
+
+**Paging.** Pages hold whole seconds only, because one evaluation logs all its transitions with
+the same `ts`. To page back, pass `until` = the oldest `ts` of the previous page, with the same
+other parameters. That cursor is exclusive, so a page never ends part-way through a second:
+
+- if the events after the first `limit` continue the page's last second, that second moves to the
+  next page, so a page may hold **fewer** than `limit` events while more exist;
+- if the first `limit` events all share one second, that whole second is returned, so a page may
+  hold **more** than `limit` events (at most one per target).
+
+The end of the list is an **empty page**, not a short one. `GET /api/v1/timers/{unit}` takes `limit` for runs (default 50, max 500). Service and
+timer details include that target's newest 50 events. The overview includes the newest 10.
 
 **Static UI.** `/` serves `index.html` with `Cache-Control: no-cache`. Paths under `/assets/`
 (Vite's content-hashed output) are served with `Cache-Control: immutable`; any other embedded file
@@ -483,7 +530,7 @@ worst of its parts in this order.
 | Service (`expect = running`) | active/running | activating, reloading, deactivating; `NRestarts` increased in last hour; memory > `memory_warning_mb` | failed; inactive/dead; LoadState ≠ loaded | collector error, stale |
 | Service (`expect = active`) | ActiveState = active | as above | failed or inactive | as above |
 | Service (`expect = any`) | not failed | — | failed | as above |
-| Timer | timer active and last run `Result=success` (or currently running) | timer not active (stopped/disabled); last success older than `max_age`; `NextElapse` > 10 min in the past | last run result ≠ success | never run; stale |
+| Timer | timer active and last run `Result=success` (or currently running: the result is not judged while running, but `max_age` still is) | timer not active (stopped/disabled); last success older than `max_age`; `NextElapse` > 10 min in the past | last run result ≠ success | never run; stale |
 | Check | success and latency < `latency_warning` | 1–2 consecutive failures; slow | ≥ 3 consecutive failures | not yet run |
 
 - **Windowed metrics.** CPU and load are evaluated on the mean over `window`. The values are kept in

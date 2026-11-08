@@ -112,6 +112,14 @@ fn run(path: &Path) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new().context("cannot start async runtime")?;
     let result = runtime.block_on(async {
         let shared = scheduler::Shared::new(config, collector).with_storage(storage);
+        // Without it, a restart logs every broken target again and journal backfill starts 30
+        // days back; neither is worth refusing to start over.
+        if let Err(e) = scheduler::restore(&shared).await {
+            tracing::warn!(
+                error = format!("{e:#}"),
+                "cannot restore state from the database"
+            );
+        }
         let loops = scheduler::spawn(&shared);
         let result = http::serve(listen, shared).await;
         // No new ticks during shutdown, also when binding failed.

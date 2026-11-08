@@ -37,5 +37,12 @@ These files are the **canonical** JSON shapes for `/api/v1`. The prose contract 
   - Disks are returned in config order, or sorted by mount when auto-detected.
 - `{unit}` and `{name}` path segments are percent-encoded by the client. An unknown unit or name
   returns `404` with an `ApiError`.
+- Error codes: `not_found` (404), `bad_request` (400), `unknown_series` (400, unknown exact metric
+  key), `unavailable` (503, no history storage), `internal` (500).
+- `GET /api/v1/events` takes `since` (inclusive), `until` (exclusive), `kind`
+  (`system|service|timer|check`), `target` and `limit` (default 100, max 500). Pages hold whole
+  seconds only, so a page can be shorter or longer than `limit`. Page back with `until` = the
+  oldest `ts` received, and stop on an **empty** page. See ARCHITECTURE §6.
+- Series units: `percent`, `load`, `bytes`, `bytes_per_s`, `celsius`, `ms`, `count`.
 - Changing any of these files is a contract change. It needs coordinator approval and must update
   the DTOs, the TS types and ARCHITECTURE §6 together.

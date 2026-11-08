@@ -59,12 +59,8 @@ pub fn evaluate_service(
     unit: &UnitSnapshot,
     restarted_recently: bool,
 ) -> Assessment {
-    if unit.load_state != "loaded" {
-        return if unit.load_state == "not-found" {
-            Assessment::new(Health::Critical, "unit not found")
-        } else {
-            Assessment::new(Health::Critical, format!("unit is {}", unit.load_state))
-        };
+    if let Some(a) = not_loaded(unit) {
+        return a;
     }
     if unit.active_state == "failed" {
         return Assessment::new(Health::Critical, failed_message(unit));
@@ -108,6 +104,18 @@ pub fn evaluate_service(
         ));
     }
     Assessment::combine(&parts)
+}
+
+/// Critical when the unit is not `loaded` (misspelt, removed, masked), else `None`.
+pub(super) fn not_loaded(unit: &UnitSnapshot) -> Option<Assessment> {
+    match unit.load_state.as_str() {
+        "loaded" => None,
+        "not-found" => Some(Assessment::new(Health::Critical, "unit not found")),
+        other => Some(Assessment::new(
+            Health::Critical,
+            format!("unit is {other}"),
+        )),
+    }
 }
 
 /// MiB to one decimal, rounded up so a value just over the limit never prints as the limit.

@@ -141,7 +141,7 @@ impl NativeIntervals {
 
     /// Derived from the key's metric, which fixes the tick that writes it.
     pub fn for_key(&self, key: &str) -> i64 {
-        if key.starts_with("service.memory:") {
+        if key.starts_with("service.memory:") || key.starts_with("service.restarts:") {
             self.units_s
         } else if let Some(name) = key.strip_prefix("check.latency:") {
             self.checks_s
@@ -229,7 +229,8 @@ pub fn list(conn: &Connection, host_id: i64) -> rusqlite::Result<Vec<SeriesInfo>
 
 #[derive(Debug)]
 pub enum QueryError {
-    BadRequest(BadRequest),
+    /// An exact key that names no stored series (`unknown_series`, 400).
+    UnknownSeries(String),
     Internal(anyhow::Error),
 }
 
@@ -258,9 +259,7 @@ pub fn run(
             None => {
                 let exact: Vec<_> = all.iter().filter(|s| &s.key == key).collect();
                 if exact.is_empty() {
-                    return Err(QueryError::BadRequest(BadRequest(format!(
-                        "unknown series key: {key}"
-                    ))));
+                    return Err(QueryError::UnknownSeries(key.clone()));
                 }
                 exact
             }

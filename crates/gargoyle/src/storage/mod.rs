@@ -5,6 +5,7 @@
 //! methods run them on the blocking pool.
 
 mod backfill;
+pub mod history;
 pub mod query;
 pub mod samples;
 mod schema;
@@ -14,11 +15,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Context;
-use gargoyle_core::api::{SeriesData, SeriesInfo};
+use gargoyle_core::api::{Event, RunSource, SeriesData, SeriesInfo, TargetKind, TimerRun};
 use gargoyle_core::config::StorageConfig;
+use gargoyle_core::health::{Health, TimerRuns, Transition};
+use gargoyle_core::model::TimerRunRecord;
 use rusqlite::Connection;
 
 pub use backfill::backfill_mock;
+pub use history::EventFilter;
 pub use query::{NativeIntervals, Plan, QueryError, QueryRequest};
 pub use samples::Sample;
 pub use writer::{Maintenance, Retention};
@@ -127,6 +131,62 @@ impl Storage {
         self.read(move |conn, host_id| query::run(conn, host_id, &req, now, raw_s, &intervals))
             .await
             .map_err(QueryError::Internal)?
+    }
+}
+
+impl Storage {
+    /// Logs health transitions observed at `ts`.
+    pub async fn insert_events(&self, ts: i64, events: Vec<Transition>) -> anyhow::Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        self.write(move |w, _| w.in_tx(|tx, _, host| history::insert_events(tx, host, ts, &events)))
+            .await
+    }
+
+    /// Inserts or completes timer runs; see [`history::upsert_runs`].
+    pub async fn upsert_runs(
+        &self,
+        runs: Vec<TimerRunRecord>,
+        source: RunSource,
+    ) -> anyhow::Result<()> {
+        if runs.is_empty() {
+            return Ok(());
+        }
+        self.write(move |w, _| w.in_tx(|tx, _, host| history::upsert_runs(tx, host, &runs, source)))
+            .await
+    }
+
+    pub async fn events(&self, filter: EventFilter) -> anyhow::Result<Vec<Event>> {
+        Ok(self
+            .read(move |conn, host| history::events(conn, host, &filter))
+            .await??)
+    }
+
+    /// The last logged state of every target.
+    pub async fn last_states(&self) -> anyhow::Result<Vec<(TargetKind, String, Health)>> {
+        Ok(self.read(history::last_states).await??)
+    }
+
+    pub async fn timer_runs(&self, timer: String, limit: i64) -> anyhow::Result<Vec<TimerRun>> {
+        Ok(self
+            .read(move |conn, host| history::timer_runs(conn, host, &timer, limit))
+            .await??)
+    }
+
+    /// The newest run and the newest success of each of `timers`.
+    pub async fn timer_summaries(
+        &self,
+        timers: Vec<String>,
+    ) -> anyhow::Result<Vec<(String, TimerRuns)>> {
+        Ok(self
+            .read(move |conn, host| {
+                timers
+                    .into_iter()
+                    .map(|t| Ok((t.clone(), history::timer_summary(conn, host, &t)?)))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .await??)
     }
 }
 
