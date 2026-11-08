@@ -354,8 +354,9 @@ Each point is `[ts, avg, min, max]`, and empty buckets are `null` so charts show
 
 **`GET /api/v1/events`** returns `{ "host", "events": [Event] }`.
 
-**Static UI.** `/` serves `index.html` with `Cache-Control: no-cache`. Other non-`/api` paths
-serve embedded assets with `Cache-Control: immutable`, because their filenames are hashed. Unknown
+**Static UI.** `/` serves `index.html` with `Cache-Control: no-cache`. Paths under `/assets/`
+(Vite's content-hashed output) are served with `Cache-Control: immutable`; any other embedded file
+uses `no-cache`. Unknown
 paths return 404. The UI uses hash routing (`/#/timers/x`), so no fallback rewrite is needed.
 
 Updates use polling (overview every 10s, charts every 60s) instead of SSE or WebSockets. At this
