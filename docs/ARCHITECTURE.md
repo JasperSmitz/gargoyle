@@ -235,6 +235,28 @@ range is at most 6h uses `points_raw`; anything else uses `points_5m`. The query
 SQL (`GROUP BY ts / step`) so it returns at most `points` buckets (default 300, maximum 1000). Each
 bucket carries `avg`, `min` and `max`.
 
+Query details:
+
+- The grid is anchored at `from` (`from + i·step`), and `to` is inclusive.
+- The step is never finer than the native interval of the slowest queried series:
+  `system_interval` by default, `units_interval` for `service.memory:*`, and the check interval
+  for `check.latency:*`. On the 5m tier the step is a multiple of 300.
+- 5m-tier queries union in the raw rows newer than the last rollup, so the right edge of a chart
+  is never empty.
+- Values are rounded to 3 decimals.
+- Parameter limits: `from >= 0`, `to <= now + 1 day`, `to - from <= 10 years`, and repeated
+  `from`, `to` or `points` → 400. A glob that matches nothing returns an empty `series`; only
+  unknown exact keys are a 400.
+
+Storage details:
+
+- The single `hosts` row is named `local`, so history survives a hostname change. The API `host`
+  field still carries the collected hostname.
+- Raw retention deletes whole 5m buckets only, so rollups are never recomputed from partial data.
+- Series with no points left in either tier are pruned during maintenance.
+- A database that cannot be opened is fatal at startup. Write and maintenance errors at runtime
+  are logged and never stop live collection.
+
 ## 6. HTTP API (contract)
 
 The API rules apply to every endpoint:
@@ -446,7 +468,8 @@ Validation rules:
 - Unit names must match the systemd naming regex (§4).
 - Check names must be unique.
 - `warning < critical`.
-- Intervals must be at least `1s`.
+- Intervals must be at least `1s`. `raw_retention` must be at least `10m`, and not exceed
+  `rollup_retention`.
 - `listen` must be loopback unless auth is configured or `allow_unauthenticated_remote = true`.
 
 ## 8. Health model
