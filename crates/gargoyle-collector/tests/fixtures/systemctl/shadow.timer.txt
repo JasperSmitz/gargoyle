@@ -1,0 +1,12 @@
+Id=shadow.timer
+Names=shadow.timer
+Description=Daily verification of password and group files
+LoadState=loaded
+ActiveState=active
+SubState=waiting
+ActiveEnterTimestamp=@1793997236
+InvocationID=6f7668033a9b4598a7252554c7bfe130
+Unit=shadow.service
+NextElapseUSecRealtime=@1794178800
+LastTriggerUSec=@1794092408
+Result=success
