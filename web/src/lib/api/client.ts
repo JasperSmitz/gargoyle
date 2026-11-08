@@ -52,6 +52,21 @@ export function isApiError(value: unknown): value is ApiError {
 
 type Query = Record<string, string | number | readonly string[] | null | undefined>;
 
+/** Per-request options accepted by every client method. */
+export interface RequestOptions {
+  /**
+   * Aborting rejects with the signal's `reason` (an `AbortError` `DOMException` by default),
+   * exactly like `fetch`, never with an `ApiRequestError`: an abort is the caller's decision,
+   * not a failure. Use `isAbortError` to tell the two apart.
+   */
+  signal?: AbortSignal;
+}
+
+/** True for the rejection produced by aborting a request through `RequestOptions.signal`. */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
 export interface ClientOptions {
   /** Defaults to the global `fetch`; injectable for tests. */
   fetch?: typeof fetch;
@@ -62,13 +77,18 @@ export function createClient({ fetch: fetchImpl, baseUrl = '/api/v1' }: ClientOp
   // Resolve the global lazily so it is called unbound and can be stubbed after creation.
   const doFetch: typeof fetch = fetchImpl ?? ((input, init) => fetch(input, init));
 
-  async function get<T>(path: string, query: Query = {}): Promise<T> {
+  async function get<T>(
+    path: string,
+    query: Query = {},
+    { signal }: RequestOptions = {},
+  ): Promise<T> {
     const url = baseUrl + path + queryString(query);
 
     let response: Response;
     try {
-      response = await doFetch(url, { headers: { Accept: 'application/json' } });
+      response = await doFetch(url, { headers: { Accept: 'application/json' }, signal });
     } catch (cause) {
+      rethrowIfAborted(signal);
       throw new ApiRequestError(CLIENT_ERROR_CODES.network, describe(cause), 0);
     }
 
@@ -76,6 +96,8 @@ export function createClient({ fetch: fetchImpl, baseUrl = '/api/v1' }: ClientOp
     try {
       body = await response.json();
     } catch {
+      // Aborting while the body streams also lands here; that must not read as a bad body.
+      rethrowIfAborted(signal);
       body = undefined;
     }
 
@@ -103,31 +125,36 @@ export function createClient({ fetch: fetchImpl, baseUrl = '/api/v1' }: ClientOp
   }
 
   return {
-    health: () => get<HealthResponse>('/health'),
-    overview: () => get<Overview>('/overview'),
-    services: () => get<ServicesResponse>('/services'),
-    service: (unit: string) => get<ServiceDetail>(`/services/${encodeURIComponent(unit)}`),
-    timers: () => get<TimersResponse>('/timers'),
-    timer: (unit: string, opts: { limit?: number } = {}) =>
-      get<TimerDetail>(`/timers/${encodeURIComponent(unit)}`, opts),
-    checks: () => get<ChecksResponse>('/checks'),
-    check: (name: string) => get<CheckDetail>(`/checks/${encodeURIComponent(name)}`),
-    metrics: () => get<MetricsResponse>('/metrics'),
-    metricsQuery: (opts: {
-      keys: readonly string[];
-      from?: UnixSeconds;
-      to?: UnixSeconds;
-      points?: number;
-    }) =>
-      get<MetricsQuery>('/metrics/query', {
-        key: opts.keys,
-        from: opts.from,
-        to: opts.to,
-        points: opts.points,
-      }),
+    health: (req?: RequestOptions) => get<HealthResponse>('/health', {}, req),
+    overview: (req?: RequestOptions) => get<Overview>('/overview', {}, req),
+    services: (req?: RequestOptions) => get<ServicesResponse>('/services', {}, req),
+    service: (unit: string, req?: RequestOptions) =>
+      get<ServiceDetail>(`/services/${encodeURIComponent(unit)}`, {}, req),
+    timers: (req?: RequestOptions) => get<TimersResponse>('/timers', {}, req),
+    timer: (unit: string, opts: { limit?: number } = {}, req?: RequestOptions) =>
+      get<TimerDetail>(`/timers/${encodeURIComponent(unit)}`, opts, req),
+    checks: (req?: RequestOptions) => get<ChecksResponse>('/checks', {}, req),
+    check: (name: string, req?: RequestOptions) =>
+      get<CheckDetail>(`/checks/${encodeURIComponent(name)}`, {}, req),
+    metrics: (req?: RequestOptions) => get<MetricsResponse>('/metrics', {}, req),
+    metricsQuery: (
+      opts: {
+        keys: readonly string[];
+        from?: UnixSeconds;
+        to?: UnixSeconds;
+        points?: number;
+      },
+      req?: RequestOptions,
+    ) =>
+      get<MetricsQuery>(
+        '/metrics/query',
+        { key: opts.keys, from: opts.from, to: opts.to, points: opts.points },
+        req,
+      ),
     events: (
       opts: { since?: UnixSeconds; until?: UnixSeconds; target?: string; limit?: number } = {},
-    ) => get<EventsResponse>('/events', opts),
+      req?: RequestOptions,
+    ) => get<EventsResponse>('/events', opts, req),
   };
 }
 
@@ -147,6 +174,10 @@ function queryString(query: Query): string {
   }
   const encoded = params.toString();
   return encoded ? `?${encoded}` : '';
+}
+
+function rethrowIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw signal.reason;
 }
 
 function describe(cause: unknown): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiRequestError, createClient, isApiError } from './client';
+import { ApiRequestError, createClient, isAbortError, isApiError } from './client';
 import { fixtures } from './fixtures';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -111,6 +111,55 @@ describe('api client', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('aborting', () => {
+  // Behaves like the real fetch: never settles on its own, rejects with the signal's reason.
+  const hangingFetch = vi.fn<typeof globalThis.fetch>(
+    (_input, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      }),
+  );
+
+  it('passes the signal to fetch and rejects with an AbortError, not an ApiRequestError', async () => {
+    const controller = new AbortController();
+    const pending = createClient({ fetch: hangingFetch }).overview({ signal: controller.signal });
+    controller.abort();
+    const error: unknown = await pending.catch((e: unknown) => e);
+    expect(hangingFetch.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+    expect(error).not.toBeInstanceOf(ApiRequestError);
+    expect(isAbortError(error)).toBe(true);
+  });
+
+  it('treats an abort while reading the body as an abort', async () => {
+    const controller = new AbortController();
+    const response = jsonResponse({});
+    vi.spyOn(response, 'json').mockImplementation(async () => {
+      controller.abort();
+      throw new DOMException('aborted', 'AbortError');
+    });
+    const api = createClient({ fetch: async () => response });
+    const error: unknown = await api.health({ signal: controller.signal }).catch((e: unknown) => e);
+    expect(isAbortError(error)).toBe(true);
+  });
+
+  it('still reports genuine network failures when a signal is given but not aborted', async () => {
+    const api = createClient({ fetch: async () => Promise.reject(new TypeError('offline')) });
+    const error = await rejection(api.overview({ signal: new AbortController().signal }));
+    expect(error.code).toBe('network');
+  });
+});
+
+describe('isAbortError', () => {
+  it.each([
+    [new DOMException('x', 'AbortError'), true],
+    [new DOMException('x', 'TimeoutError'), false],
+    [new ApiRequestError('network', 'x', 0), false],
+    [new Error('AbortError'), false],
+  ])('%s -> %s', (value, expected) => {
+    expect(isAbortError(value)).toBe(expected);
   });
 });
 
