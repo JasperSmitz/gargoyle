@@ -14,6 +14,7 @@ import type {
   TimerRun,
   TimerSummary,
 } from '../src/lib/api/types';
+import { checkEvents } from './mock-checks';
 
 const HOUR = 3600;
 const DAY = 24 * HOUR;
@@ -286,6 +287,7 @@ function allEvents(now: number, services: readonly ServiceSummary[]): HealthEven
     flapping('system', 'cpu', 19 * HOUR, 7 * 60, 'warning', 'cpu at 91% (warning ≥ 85%)', now),
     flapping('system', 'disk:/', 9 * DAY, 4 * DAY, 'warning', 'disk / at 84% (warning ≥ 80%)', now),
     flapping('check', 'Music HTTP', 4 * DAY, 3 * 60, 'warning', '1 consecutive failure', now),
+    checkEvents(now),
   );
   return sources
     .flatMap((drafts, source) => withIds(drafts, source))

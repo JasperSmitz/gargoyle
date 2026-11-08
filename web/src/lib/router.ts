@@ -9,6 +9,7 @@ const ROUTES = [
   { name: 'events', pattern: '/events' },
   { name: 'service', pattern: '/services/:unit' },
   { name: 'timer', pattern: '/timers/:unit' },
+  { name: 'check', pattern: '/checks/:name' },
 ] as const satisfies readonly {
   name: string;
   pattern: string;
@@ -79,11 +80,8 @@ export function hrefWithQuery(
   return href(...parts) + (encoded ? `?${encoded}` : '');
 }
 
-/**
- * Where a target is shown in detail. Checks have no page yet, and system targets
- * (`cpu`, `disk:/`) all live on the System page.
- */
-export function targetHref(kind: TargetKind, target: string): string | null {
+/** Where a target is shown in detail. System targets (`cpu`, `disk:/`) all live on the System page. */
+export function targetHref(kind: TargetKind, target: string): string {
   switch (kind) {
     case 'service':
       return href('services', target);
@@ -92,7 +90,7 @@ export function targetHref(kind: TargetKind, target: string): string | null {
     case 'system':
       return href('system');
     case 'check':
-      return null;
+      return href('checks', target);
   }
 }
 

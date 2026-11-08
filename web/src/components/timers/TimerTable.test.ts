@@ -34,10 +34,15 @@ describe('TimerTable', () => {
     );
   });
 
-  it('says a timer never ran, once', () => {
+  it('says a timer never ran, with the message under the name', () => {
     const [row] = rows([never]);
     expect(cell(row, 1)).toBe('Never run');
-    expect(row?.textContent?.match(/never run/gi)).toHaveLength(1);
+    expect(row?.querySelector('.message')?.textContent).toBe('never run');
+  });
+
+  it('shows the message of a failed timer under its name', () => {
+    const [row] = rows([failed]);
+    expect(row?.querySelector('.message')?.textContent).toBe(failed.message);
   });
 
   it('shows a running timer and when it started', () => {

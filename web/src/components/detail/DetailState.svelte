@@ -31,7 +31,7 @@
 
 {#if notFound}
   <EmptyState title="No {noun} called {name}">
-    Only units configured in <code>gargoyle.toml</code> are watched.
+    Only targets configured in <code>gargoyle.toml</code> are watched.
     <a href={href()}>Back to the overview</a>
   </EmptyState>
 {:else if data !== null}

@@ -5,6 +5,7 @@
 
 import { fixtures } from '../src/lib/api/fixtures';
 import type { MetricPoint, MetricsQuery, SeriesInfo, SeriesUnit } from '../src/lib/api/types';
+import { LATENCY_CHECKS, latencyMissing, latencySample } from './mock-checks';
 
 const HOST = 'debian-box';
 const RAW_INTERVAL = 10;
@@ -29,7 +30,7 @@ const SERIES: [key: string, unit: SeriesUnit][] = [
   ['net.rx:enp1s0', 'bytes_per_s'],
   ['net.tx:enp1s0', 'bytes_per_s'],
   ['temp:coretemp/Package id 0', 'celsius'],
-  ['check.latency:Music HTTP', 'ms'],
+  ...LATENCY_CHECKS.map((name): [string, SeriesUnit] => [`check.latency:${name}`, 'ms']),
   // Only the running service: minecraft.service has never reported memory, like a real unit
   // that failed before the first sample, which the service page shows as "no data".
   ['service.memory:navidrome.service', 'bytes'],
@@ -108,12 +109,17 @@ function bucket(key: string, start: number, step: number, now: number): MetricPo
   const samples = Math.max(MIN_SAMPLES, Math.ceil(step / SAMPLE_SPACING));
   for (let i = 0; i < samples; i += 1) {
     const t = start + Math.floor((i * step) / samples);
-    if (t > now || inOutage(t)) continue;
+    if (t > now || inOutage(t) || failedProbe(key, t, now)) continue;
     values.push(sample(key, t, now));
   }
   if (values.length === 0) return [start, null, null, null];
   const avg = values.reduce((a, b) => a + b, 0) / values.length;
   return [start, round(avg), round(Math.min(...values)), round(Math.max(...values))];
+}
+
+function failedProbe(key: string, t: number, now: number): boolean {
+  const name = key.startsWith('check.latency:') ? key.slice('check.latency:'.length) : null;
+  return name !== null && latencyMissing(name, t, now);
 }
 
 function inOutage(t: number): boolean {
@@ -177,8 +183,6 @@ function sample(key: string, t: number, now: number): number {
       return 1024 * (5 + 6 * (daily + 1) + 300 * jitter ** 16);
     case 'temp:coretemp/Package id 0':
       return 38 + cpu * 0.35 + 2 * jitter;
-    case 'check.latency:Music HTTP':
-      return 2.5 + 2 * jitter ** 4 + (jitter > 0.995 ? 120 : 0);
     case 'service.memory:navidrome.service':
       // A slow leak that a weekly restart resets, plus activity in the evening.
       return 1024 ** 2 * (120 + 60 * ((t / (7 * DAY)) % 1) + 25 * (daily + 1) + 6 * jitter);
@@ -188,6 +192,9 @@ function sample(key: string, t: number, now: number): number {
     case 'service.restarts:minecraft.service':
       return minecraftRestarts(t, now);
     default:
+      if (key.startsWith('check.latency:')) {
+        return latencySample(key.slice('check.latency:'.length), jitter, daily);
+      }
       return 0;
   }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import type { Health } from '../../lib/api/types';
+  import { breakPoints } from '../../lib/format';
   import { needsAttention } from '../../lib/health';
   import HealthBadge from '../HealthBadge.svelte';
 
@@ -29,7 +30,12 @@
     <div class="names">
       <span class="kind">{kind}</span>
       <h1>{name}</h1>
-      {#if unit !== name}<code class="unit">{unit}</code>{/if}
+      {#if unit !== name}
+        <!-- <wbr> lets a long URL wrap between segments; overflow-wrap is the fallback. -->
+        <code class="unit"
+          >{#each breakPoints(unit) as part, i (i)}{#if i > 0}<wbr />{/if}{part}{/each}</code
+        >
+      {/if}
     </div>
     <HealthBadge {health} />
   </div>

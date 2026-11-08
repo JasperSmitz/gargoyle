@@ -14,8 +14,8 @@ export interface Problem {
   name: string;
   health: Health;
   message: string;
-  /** The page with more detail, if there is one. */
-  href: string | null;
+  /** The page with more detail. */
+  href: string;
 }
 
 export function collectProblems(overview: Overview): Problem[] {

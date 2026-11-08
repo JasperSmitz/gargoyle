@@ -3,7 +3,7 @@
   import { HEALTH_BY_SEVERITY } from '../../lib/health';
   import { collectProblems } from '../../lib/problems';
   import HealthBadge from '../HealthBadge.svelte';
-  import HealthIcon from '../HealthIcon.svelte';
+  import HealthLabel from '../HealthLabel.svelte';
 
   // First thing on the page: the overall verdict, then exactly what is wrong.
   let { overview }: { overview: Overview } = $props();
@@ -14,10 +14,15 @@
   // may name several system metrics individually.
   const total = $derived(Object.values(overview.counts).reduce((a, b) => a + b, 0));
   const unhealthy = $derived(total - overview.counts.healthy);
+  // With nothing configured the system is the only target; "All 1 target healthy" reads oddly.
   const headline = $derived(
-    unhealthy === 0
-      ? `All ${total} ${total === 1 ? 'target' : 'targets'} healthy`
-      : `${unhealthy} of ${total} ${total === 1 ? 'target needs' : 'targets need'} attention`,
+    total <= 1
+      ? unhealthy === 0
+        ? 'System healthy'
+        : 'System needs attention'
+      : unhealthy === 0
+        ? `All ${total} targets healthy`
+        : `${unhealthy} of ${total} targets need attention`,
   );
   const KIND_LABEL = { system: 'System', service: 'Service', timer: 'Timer', check: 'Check' };
 </script>
@@ -27,25 +32,22 @@
     <HealthBadge health={overview.health} size="lg" />
     <h1 class="headline" id={headingId}>{headline}</h1>
   </div>
-  <ul class="counts" aria-label="Targets by health">
-    {#each HEALTH_BY_SEVERITY as health (health)}
-      {#if overview.counts[health] > 0}
-        <li><HealthBadge {health} size="sm" label="{overview.counts[health]} {health}" /></li>
-      {/if}
-    {/each}
-  </ul>
+  <!-- With only the system there is nothing to tally; the badge and headline already say it. -->
+  {#if total > 1}<ul class="counts" aria-label="Targets by health">
+      {#each HEALTH_BY_SEVERITY as health (health)}
+        {#if overview.counts[health] > 0}
+          <li><HealthBadge {health} size="sm" label="{overview.counts[health]} {health}" /></li>
+        {/if}
+      {/each}
+    </ul>{/if}
 
   {#if problems.length > 0}
     <ul class="problems" aria-label="Needs attention">
       {#each problems as problem (problem.id)}
-        <li class="problem health-{problem.health}">
-          <HealthIcon health={problem.health} />
+        <li class="problem">
+          <HealthLabel health={problem.health} size={16} hideText />
           <span class="what">
-            {#if problem.href}
-              <a class="name" href={problem.href}>{problem.name}</a>
-            {:else}
-              <span class="name">{problem.name}</span>
-            {/if}
+            <a class="name" href={problem.href}>{problem.name}</a>
             <span class="kind">{KIND_LABEL[problem.kind]}</span>
           </span>
           <span class="message">{problem.message}</span>
@@ -122,7 +124,7 @@
     padding-bottom: 0;
   }
 
-  .problem :global(.icon) {
+  .problem > :global(.label) {
     align-self: center;
   }
 
@@ -162,16 +164,6 @@
     font-size: var(--text-sm);
     color: var(--color-text-muted);
     overflow-wrap: anywhere;
-  }
-
-  .health-warning > :global(.icon) {
-    color: var(--health-warning-fg);
-  }
-  .health-critical > :global(.icon) {
-    color: var(--health-critical-fg);
-  }
-  .health-unknown > :global(.icon) {
-    color: var(--health-unknown-fg);
   }
 
   @media (min-width: 40rem) {

@@ -154,11 +154,13 @@ describe('OverviewPage', () => {
   it('renders timers, checks and recent events when present', () => {
     renderOverview();
     const timers = within(section('Timers')).getAllByRole('row').slice(1);
-    // The last-run column explains the failure, so the message is not repeated under the name.
-    expect(timers[0]?.textContent?.match(/exit-code \(status 1\)/g)).toHaveLength(1);
+    // Non-healthy rows always carry the message, even next to the last-run outcome.
+    expect(timers[0]?.querySelector('.message')?.textContent).toBe(
+      'last run failed: exit-code (status 1)',
+    );
     expect(timers[0]?.textContent).toContain('2h ago');
     expect(timers[0]?.textContent).toContain('in 21h 13m');
-    expect(timers[1]?.textContent?.match(/never run/gi)).toHaveLength(1);
+    expect(timers[1]?.querySelector('.message')?.textContent).toBe('never run');
 
     expect(section('Checks').textContent).toContain('3.1 ms');
     const events = within(section('Recent events')).getAllByRole('listitem');
@@ -177,24 +179,106 @@ describe('OverviewPage', () => {
       '#/services/minecraft.service',
     ]);
     expect(links('Music sync')).toEqual(['#/timers/music-sync.timer', '#/timers/music-sync.timer']);
-    // System problems lead to the charts; checks have no page yet, so no link.
+    // System problems lead to the charts.
     expect(links('Disk /')).toEqual(['#/system']);
-    expect(screen.queryByRole('link', { name: 'Music HTTP' })).toBeNull();
+    expect(links('Music HTTP')).toEqual(['#/checks/Music%20HTTP']);
   });
 
-  it('shows an empty state with a config hint and hides empty optional sections', () => {
+  it('shows a calm "all quiet" state with a config hint when nothing is configured', () => {
     const empty = structuredClone(example);
     empty.services = [];
     empty.timers = [];
     empty.checks = [];
     empty.recentEvents = [];
+    empty.health = 'healthy';
+    empty.system.health = 'healthy';
+    empty.system.disks.forEach((d) => (d.health = 'healthy'));
+    empty.counts = { healthy: 1, warning: 0, critical: 0, unknown: 0 };
     renderOverview(empty);
-    const services = section('Services');
-    expect(services.textContent).toContain('No services configured');
-    expect(services.textContent).toContain('[[service]]');
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('System healthy');
+    const quiet = section('All quiet');
+    for (const kind of ['[[service]]', '[[timer]]', '[[check]]', 'gargoyle.toml']) {
+      expect(quiet.textContent).toContain(kind);
+    }
+    expect(screen.queryByRole('region', { name: /^Services/ })).toBeNull();
     expect(screen.queryByRole('region', { name: /^Timers/ })).toBeNull();
     expect(screen.queryByRole('region', { name: /^Checks/ })).toBeNull();
-    expect(screen.queryByRole('region', { name: /^Recent events/ })).toBeNull();
+    expect(section('Recent events').textContent).toContain('No health changes recorded yet');
+    // System metrics are still shown.
+    const system = screen.getByRole('region', { name: 'System' });
+    expect(within(system).getByRole('region', { name: 'CPU' })).toBeTruthy();
+  });
+
+  it('does not call a warning "all quiet" when nothing is configured', () => {
+    const empty = structuredClone(example);
+    empty.services = [];
+    empty.timers = [];
+    empty.checks = [];
+    empty.health = 'warning';
+    renderOverview(empty);
+    expect(screen.queryByRole('region', { name: /^All quiet/ })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Only system metrics are watched' })).toBeTruthy();
+  });
+
+  it('names unconfigured kinds in one line instead of empty sections', () => {
+    const partial = structuredClone(example);
+    partial.timers = [];
+    partial.checks = [];
+    renderOverview(partial);
+    expect(screen.queryByRole('region', { name: /^All quiet/ })).toBeNull();
+    expect(section('Services')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: /^Timers/ })).toBeNull();
+    const hint = screen.getByText(/Not watching any/);
+    expect(hint.textContent?.replace(/\s+/g, ' ')).toContain(
+      'Not watching any timers or checks. Add [[timer]] or [[check]] entries',
+    );
+  });
+
+  it('shows checks as a table: kind, sanitized target, latency, last check, failures, health', () => {
+    const overview = structuredClone(example);
+    overview.checks = structuredClone(fixtures['checks.json'].checks);
+    renderOverview(overview);
+    const rows = within(section('Checks')).getAllByRole('row');
+    expect(rows[0]?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'Check Latency Last check Failures Health',
+    );
+    const cells = (row: HTMLElement | undefined) =>
+      [...(row?.querySelectorAll('th, td') ?? [])].map((c) =>
+        (c.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      );
+    // Worst first: the failing TCP check, with its message under the name.
+    expect(cells(rows[1])).toEqual([
+      'Game port TCP 127.0.0.1:25565 connection refused (1 consecutive failure)',
+      'Failed',
+      '10s ago',
+      '1 in a row',
+      'Warning',
+    ]);
+    expect(cells(rows[2])).toEqual([
+      'Music HTTP HTTP http://127.0.0.1:4533/ping',
+      '3.1 ms',
+      '20s ago',
+      '0',
+      'Healthy',
+    ]);
+    expect(within(rows[1]!).getByRole('link', { name: 'Game port' }).getAttribute('href')).toBe(
+      '#/checks/Game%20port',
+    );
+  });
+
+  it('shows the message of every non-healthy target, and names each state in text', () => {
+    const overview = structuredClone(example);
+    overview.checks = structuredClone(fixtures['checks.json'].checks);
+    renderOverview(overview);
+    const text = document.body.textContent ?? '';
+    for (const target of [...overview.services, ...overview.timers, ...overview.checks]) {
+      if (target.health !== 'healthy') expect(text).toContain(target.message);
+    }
+    // Problem lines use a compact icon; the state is still spoken.
+    const problems = screen.getByRole('list', { name: 'Needs attention' });
+    const first = within(problems).getAllByRole('listitem')[0]!;
+    expect(first.querySelector('.sr-only')?.textContent).toBe('Critical');
+    expect(first.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('reports an all-healthy host plainly', () => {

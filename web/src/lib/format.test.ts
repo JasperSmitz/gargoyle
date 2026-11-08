@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  breakPoints,
   PLACEHOLDER,
   formatBytes,
   formatCountdown,
@@ -155,5 +156,28 @@ describe('formatRelativeTime for timer runs', () => {
     [now + 600, 'in 10m'],
   ])('%d -> %s', (ts, expected) => {
     expect(formatRelativeTime(ts, now)).toBe(expected);
+  });
+});
+
+describe('breakPoints', () => {
+  it('splits after URL and unit separators, losslessly', () => {
+    const url = 'http://127.0.0.1:2342/api/v1/status';
+    expect(breakPoints(url)).toEqual([
+      'http:',
+      '/',
+      '/',
+      '127.',
+      '0.',
+      '0.',
+      '1:',
+      '2342/',
+      'api/',
+      'v1/',
+      'status',
+    ]);
+    expect(breakPoints(url).join('')).toBe(url);
+    expect(breakPoints('music-sync.timer')).toEqual(['music-', 'sync.', 'timer']);
+    expect(breakPoints('plain')).toEqual(['plain']);
+    expect(breakPoints('')).toEqual([]);
   });
 });

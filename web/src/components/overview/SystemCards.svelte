@@ -2,9 +2,9 @@
   import type { HostInfo, SystemMetrics } from '../../lib/api/types';
   import type { Column } from '../../lib/charts/data';
   import { formatValue } from '../../lib/charts/units';
-  import { HEALTH_PRESENTATION, worst } from '../../lib/health';
+  import { worst } from '../../lib/health';
   import Sparkline from '../charts/Sparkline.svelte';
-  import HealthIcon from '../HealthIcon.svelte';
+  import HealthLabel from '../HealthLabel.svelte';
   import {
     formatBytes,
     formatDuration,
@@ -136,10 +136,7 @@
             <li data-health={temp.health}>
               <span class="temp-label">{temp.label}</span>
               <span class="temp-value">{formatValue('celsius', temp.celsius)}</span>
-              <span class="temp-health health-{temp.health}">
-                <HealthIcon health={temp.health} size={14} />
-                <span class="sr-only">{HEALTH_PRESENTATION[temp.health].label}</span>
-              </span>
+              <HealthLabel health={temp.health} size={14} hideText />
             </li>
           {/each}
         </ul>
@@ -287,26 +284,6 @@
 
   .temp-value {
     font-variant-numeric: tabular-nums;
-  }
-
-  .temp-health {
-    display: inline-flex;
-  }
-
-  .health-healthy {
-    color: var(--health-healthy-fg);
-  }
-
-  .health-warning {
-    color: var(--health-warning-fg);
-  }
-
-  .health-critical {
-    color: var(--health-critical-fg);
-  }
-
-  .health-unknown {
-    color: var(--health-unknown-fg);
   }
 
   .facts {

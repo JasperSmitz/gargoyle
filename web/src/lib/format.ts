@@ -112,3 +112,12 @@ export function formatTimestamp(ts: number | null): string {
 export function isTimestamp(ts: number | null): ts is number {
   return ts !== null && Number.isFinite(ts) && ts > 0;
 }
+
+/**
+ * Splits a URL, address or unit name after its natural separators (`/`, `.`, `:`, `@`, `-`, `_`)
+ * so the parts can be joined with `<wbr>`: long targets then wrap between path segments instead
+ * of mid-word. Joining the parts gives back the input exactly.
+ */
+export function breakPoints(text: string): string[] {
+  return text.split(/(?<=[/.:@_-])/).filter((part) => part !== '');
+}

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  CheckDetail,
+  ChecksResponse,
   EventsResponse,
+  MetricsQuery,
   Overview,
   ServiceDetail,
   TimerDetail,
@@ -11,9 +14,82 @@ import { respond } from './mock-api';
 const NOW = 1_794_200_000;
 
 function get<T>(path: string, query = '', now = NOW): { status: number; body: T } {
-  const { status, body } = respond(path, new URLSearchParams(query), false, now);
+  const { status, body } = respond(path, new URLSearchParams(query), 'normal', now);
   return { status, body: body as T };
 }
+
+describe('mock checks', () => {
+  it('covers every health state, with a message whenever not healthy', () => {
+    const { checks } = get<ChecksResponse>('/checks').body;
+    expect(new Set(checks.map((c) => c.health))).toEqual(
+      new Set(['healthy', 'warning', 'critical', 'unknown']),
+    );
+    for (const c of checks) {
+      if (c.health !== 'healthy') expect(c.message).toBeTruthy();
+      expect(c.target).not.toMatch(/@|\?/);
+    }
+    expect(get<Overview>('/overview').body.checks).toEqual(checks);
+  });
+
+  it('serves a check with its own events, and 404 for an unknown one', () => {
+    const { check, events } = get<CheckDetail>('/checks/Grafana').body;
+    expect(check).toMatchObject({ name: 'Grafana', health: 'critical' });
+    expect(events.map((e) => e.to)).toEqual(['critical', 'warning']);
+    // No hold-down for checks: warning on the first failure, critical on the third.
+    expect(events[1]).toMatchObject({
+      from: 'healthy',
+      message: 'HTTP 502 Bad Gateway (1 consecutive failure)',
+    });
+    expect(events[0]).toMatchObject({
+      from: 'warning',
+      message: 'HTTP 502 Bad Gateway (3 consecutive failures)',
+    });
+    expect(events[0]!.ts - events[1]!.ts).toBe(2 * 60);
+    expect(check.lastCheck! - events[0]!.ts).toBe(60);
+    expect(events.every((e) => e.target === 'Grafana' && e.targetKind === 'check')).toBe(true);
+    expect(get('/checks/Nope').status).toBe(404);
+  });
+
+  it('has a latency series for every check that has answered', () => {
+    const q = (key: string) =>
+      respond('/metrics/query', new URLSearchParams({ key }), 'normal', NOW);
+    expect(q('check.latency:Photos API').status).toBe(200);
+    expect(q('check.latency:Home Assistant').status).toBe(400);
+  });
+
+  it('leaves a gap in the latency of a failing check, from its first failure', () => {
+    const series = (key: string) =>
+      (
+        respond(
+          '/metrics/query',
+          new URLSearchParams({ key, from: String(NOW - 3600), to: String(NOW) }),
+          'normal',
+          NOW,
+        ).body as MetricsQuery
+      ).series[0]!.points;
+    const grafana = series('check.latency:Grafana');
+    expect(grafana.at(-1)?.[1]).toBeNull();
+    expect(grafana.find(([t]) => t < NOW - 600)?.[1]).not.toBeNull();
+    expect(series('check.latency:Music HTTP').at(-1)?.[1]).not.toBeNull();
+  });
+});
+
+describe('mock modes', () => {
+  it('serves an empty config with only the system counted', () => {
+    const overview = respond('/overview', new URLSearchParams(), 'empty', NOW).body as Overview;
+    expect(overview.services).toEqual([]);
+    expect(overview.timers).toEqual([]);
+    expect(overview.checks).toEqual([]);
+    expect(overview.recentEvents).toEqual([]);
+    expect(Object.values(overview.counts).reduce((a, b) => a + b, 0)).toBe(1);
+    expect(overview.health).toBe('healthy');
+    expect(overview.counts.healthy).toBe(1);
+  });
+
+  it('fails everything when offline', () => {
+    expect(respond('/overview', new URLSearchParams(), 'offline', NOW).status).toBe(503);
+  });
+});
 
 describe('mock timers', () => {
   it('covers failed, never-run, running, healthy and stopped timers', () => {

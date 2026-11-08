@@ -51,7 +51,7 @@
           Updated <span class="ago">{formatRelativeTime(receivedAt, now)}</span>
         </span>
       {/if}
-      {#if health}<HealthBadge {health} size="sm" />{/if}
+      {#if health}<HealthBadge {health} size="sm" context="Overall health" />{/if}
     </div>
   </div>
 </header>
