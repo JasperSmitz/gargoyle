@@ -13,6 +13,7 @@
     now,
     stale,
     route,
+    library = false,
   }: {
     host: string | null;
     health: Health | null;
@@ -22,13 +23,17 @@
     now: number;
     stale: boolean;
     route: RouteName;
+    /** `[library]` is configured: the Library page joins the nav. */
+    library?: boolean;
   } = $props();
 
-  const NAV: { route: RouteName; label: string; href: string }[] = [
+  type NavItem = { route: RouteName; label: string; href: string };
+  const NAV = $derived<NavItem[]>([
     { route: 'overview', label: 'Overview', href: href() },
     { route: 'system', label: 'System', href: href('system') },
+    ...(library ? [{ route: 'library' as const, label: 'Library', href: href('library') }] : []),
     { route: 'events', label: 'Events', href: href('events') },
-  ];
+  ]);
 </script>
 
 <header class="header">

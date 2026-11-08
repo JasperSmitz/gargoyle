@@ -49,4 +49,19 @@ describe('CSP compatibility', () => {
       expect(text, file).not.toMatch(/\beval\(|new Function\(|setTimeout\(\s*['"`]/);
     }
   });
+
+  // Liner messages, titles and paths are report data (ADR 0007): they must reach the DOM as text.
+  it('covers the library page and renders no markup from data', () => {
+    for (const file of [
+      './pages/LibraryPage.svelte',
+      './components/library/IssueList.svelte',
+      './components/library/SeverityChip.svelte',
+      './components/overview/LibraryCard.svelte',
+    ]) {
+      expect(Object.keys(sources), file).toContain(file);
+    }
+    for (const [file, text] of Object.entries(sources)) {
+      expect(text, file).not.toMatch(/\{@html\b|\.innerHTML\s*=|insertAdjacentHTML/);
+    }
+  });
 });

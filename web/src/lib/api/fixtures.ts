@@ -10,6 +10,7 @@ import type {
   ChecksResponse,
   EventsResponse,
   HealthResponse,
+  LibraryResponse,
   MetricsQuery,
   MetricsResponse,
   Overview,
@@ -24,6 +25,8 @@ import checksJson from '../../../../docs/api/examples/checks.json';
 import errorJson from '../../../../docs/api/examples/error.json';
 import eventsJson from '../../../../docs/api/examples/events.json';
 import healthJson from '../../../../docs/api/examples/health.json';
+import libraryUnconfiguredJson from '../../../../docs/api/examples/library-unconfigured.json';
+import libraryJson from '../../../../docs/api/examples/library.json';
 import metricsQueryJson from '../../../../docs/api/examples/metrics-query.json';
 import metricsJson from '../../../../docs/api/examples/metrics.json';
 import overviewJson from '../../../../docs/api/examples/overview.json';
@@ -42,6 +45,14 @@ export const fixtures = {
   'error.json': errorJson satisfies Conforms<typeof errorJson, ApiError> as ApiError,
   'events.json': eventsJson satisfies Conforms<typeof eventsJson, EventsResponse> as EventsResponse,
   'health.json': healthJson satisfies Conforms<typeof healthJson, HealthResponse> as HealthResponse,
+  'library.json': libraryJson satisfies Conforms<
+    typeof libraryJson,
+    LibraryResponse
+  > as LibraryResponse,
+  'library-unconfigured.json': libraryUnconfiguredJson satisfies Conforms<
+    typeof libraryUnconfiguredJson,
+    LibraryResponse
+  > as LibraryResponse,
   'metrics-query.json': metricsQueryJson satisfies Conforms<
     typeof metricsQueryJson,
     MetricsQuery

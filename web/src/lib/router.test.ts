@@ -14,6 +14,8 @@ describe('parseHash', () => {
     ['#/timers/music-sync.timer', 'timer', { unit: 'music-sync.timer' }],
     ['#/services/my%40x.service', 'service', { unit: 'my@x.service' }],
     ['#/events?target=a.timer', 'events', {}],
+    ['#/library', 'library', {}],
+    ['#/library?severity=error', 'library', {}],
   ])('routes %s to the %s page', (hash, name, params) => {
     expect(parseHash(hash)).toMatchObject({ name, params });
   });
@@ -66,6 +68,7 @@ describe('targetHref', () => {
     ['timer', 'a@b.timer', '#/timers/a%40b.timer'],
     ['system', 'disk:/', '#/system'],
     ['check', 'Music HTTP', '#/checks/Music%20HTTP'],
+    ['library', 'library', '#/library'],
   ] as const)('%s %s -> %s', (kind, target, expected) => {
     expect(targetHref(kind, target)).toBe(expected);
   });

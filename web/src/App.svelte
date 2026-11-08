@@ -18,8 +18,10 @@
   import type { Visibility } from './lib/poller';
   import { hashQuery, href, parseHash, type Route } from './lib/router';
   import { parseEventFilters } from './lib/event-filters';
+  import { parseSeverityFilter } from './lib/library';
   import CheckPage from './pages/CheckPage.svelte';
   import EventsPage from './pages/EventsPage.svelte';
+  import LibraryPage from './pages/LibraryPage.svelte';
   import OverviewPage from './pages/OverviewPage.svelte';
   import ServicePage from './pages/ServicePage.svelte';
   import SystemPage from './pages/SystemPage.svelte';
@@ -32,7 +34,7 @@
   }: {
     client?: Pick<
       ApiClient,
-      'overview' | 'metrics' | 'metricsQuery' | 'service' | 'timer' | 'check' | 'events'
+      'overview' | 'metrics' | 'metricsQuery' | 'service' | 'timer' | 'check' | 'events' | 'library'
     >;
     visibility?: Visibility;
   } = $props();
@@ -110,6 +112,8 @@
         return 'System';
       case 'events':
         return 'Events';
+      case 'library':
+        return 'Library';
       case 'service':
       case 'timer':
         return route.params.unit ?? null;
@@ -123,6 +127,7 @@
   const query = $derived(hashQuery(hash));
   const range = $derived(parseRange(query.get('range')));
   const eventFilters = $derived(parseEventFilters(query));
+  const severityFilter = $derived(parseSeverityFilter(query));
   let now = $state(Date.now() / 1000);
 
   // Keyed on the name only: a new route object for the same page must not restart the feed.
@@ -174,6 +179,7 @@
   {now}
   stale={failure !== null}
   route={route.name}
+  library={(feed.data?.library ?? null) !== null}
 />
 
 <main class="main" id="main" tabindex="-1">
@@ -211,6 +217,14 @@
     {#key route.params.name}
       <CheckPage name={route.params.name ?? ''} {range} {client} {visibility} {serverNow} />
     {/key}
+  {:else if route.name === 'library'}
+    <LibraryPage
+      filter={severityFilter}
+      {client}
+      {visibility}
+      {serverNow}
+      name={feed.data?.library?.name}
+    />
   {:else if route.name === 'events'}
     {#key `${eventFilters.kind}|${eventFilters.target}`}
       <EventsPage filters={eventFilters} {client} overview={feed.data} {visibility} {serverNow} />

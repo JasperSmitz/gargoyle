@@ -20,7 +20,7 @@ describe('OverviewPage', () => {
     renderOverview();
     const summary = screen.getByRole('region', { name: /need attention/ });
     expect(within(summary).getByRole('heading', { level: 1 }).textContent).toBe(
-      '4 of 6 targets need attention',
+      '5 of 7 targets need attention',
     );
     const problems = within(summary).getByRole('list', { name: 'Needs attention' });
     const rows = within(problems)
@@ -36,12 +36,12 @@ describe('OverviewPage', () => {
     twoDisks.system.disks.forEach((d) => (d.health = 'warning'));
     twoDisks.system.cpu.health = 'warning';
     renderOverview(twoDisks);
-    // counts are unchanged ({critical:2, warning:1, unknown:1, healthy:2}): the system is one target.
+    // counts are unchanged ({critical:2, warning:2, unknown:1, healthy:2}): the system is one target.
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
-      '4 of 6 targets need attention',
+      '5 of 7 targets need attention',
     );
     const problems = screen.getByRole('list', { name: 'Needs attention' });
-    expect(within(problems).getAllByRole('listitem')).toHaveLength(6);
+    expect(within(problems).getAllByRole('listitem')).toHaveLength(7);
   });
 
   it("handles the backend's ts = 0 before the first system sample", () => {
@@ -164,7 +164,7 @@ describe('OverviewPage', () => {
 
     expect(section('Checks').textContent).toContain('3.1 ms');
     const events = within(section('Recent events')).getAllByRole('listitem');
-    expect(events).toHaveLength(3);
+    expect(events).toHaveLength(4);
     expect(events[0]?.textContent).toContain('minecraft.service');
     expect(events[0]?.textContent).toMatch(/Healthy\s*→\s*Critical/);
     expect(within(section('Recent events')).getByRole('link', { name: 'All events' })).toBeTruthy();
@@ -189,6 +189,7 @@ describe('OverviewPage', () => {
     empty.services = [];
     empty.timers = [];
     empty.checks = [];
+    empty.library = null;
     empty.recentEvents = [];
     empty.health = 'healthy';
     empty.system.health = 'healthy';
@@ -214,6 +215,7 @@ describe('OverviewPage', () => {
     empty.services = [];
     empty.timers = [];
     empty.checks = [];
+    empty.library = null;
     empty.health = 'warning';
     renderOverview(empty);
     expect(screen.queryByRole('region', { name: /^All quiet/ })).toBeNull();
@@ -288,9 +290,77 @@ describe('OverviewPage', () => {
     healthy.system.disks.forEach((d) => (d.health = 'healthy'));
     healthy.services.forEach((s) => ((s.health = 'healthy'), (s.message = null)));
     healthy.timers.forEach((t) => ((t.health = 'healthy'), (t.message = null)));
-    healthy.counts = { healthy: 6, warning: 0, critical: 0, unknown: 0 };
+    healthy.library = { ...healthy.library!, health: 'healthy', message: null };
+    healthy.counts = { healthy: 7, warning: 0, critical: 0, unknown: 0 };
     renderOverview(healthy);
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('All 6 targets healthy');
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('All 7 targets healthy');
     expect(screen.queryByRole('list', { name: 'Needs attention' })).toBeNull();
+  });
+
+  it('shows a library card with health, counts, report age and a link', () => {
+    renderOverview();
+    const card = section('Library');
+    const text = card.textContent?.replace(/\s+/g, ' ') ?? '';
+    expect(within(card).getByRole('heading', { name: 'Music library' })).toBeTruthy();
+    expect(within(card).getByText('Warning')).toBeTruthy();
+    expect(text).toContain('2 errors, 4 warnings, 1 info in 95 albums; 1 unreadable file');
+    const counts = within(card).getByRole('list', { name: 'Issues by severity' });
+    expect(
+      within(counts)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent?.trim()),
+    ).toEqual(['2 errors', '4 warnings', '1 info']);
+    expect(text).toContain('1 unreadable file');
+    expect(text).toContain('95 albums');
+    // ts 1794200000 - generatedAt 1794132000 = 68000s.
+    expect(text).toContain('Report 18h ago');
+    expect(
+      within(card).getByRole('link', { name: 'View library report' }).getAttribute('href'),
+    ).toBe('#/library');
+    // And the library is in the problem list, linking to its page.
+    const problems = screen.getByRole('list', { name: 'Needs attention' });
+    expect(within(problems).getByRole('link', { name: 'Music library' }).getAttribute('href')).toBe(
+      '#/library',
+    );
+  });
+
+  it('shows the reason and no counts when the library has no valid report', () => {
+    const missing = structuredClone(example);
+    missing.library = {
+      ...missing.library!,
+      health: 'unknown',
+      message: 'report not found',
+      generatedAt: null,
+      age: null,
+      issueCounts: null,
+      unreadableFiles: null,
+      albums: null,
+    };
+    renderOverview(missing);
+    const card = section('Library');
+    expect(card.textContent).toContain('report not found');
+    expect(within(card).getByText('Unknown')).toBeTruthy();
+    expect(within(card).queryByRole('list', { name: 'Issues by severity' })).toBeNull();
+    expect(card.textContent).not.toMatch(/unreadable|albums|Report /);
+  });
+
+  it('has no library card without [library]', () => {
+    renderOverview({ ...structuredClone(example), library: null });
+    expect(screen.queryByRole('region', { name: /^Library/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'View library report' })).toBeNull();
+  });
+
+  it('does not say only system metrics are watched when the library is', () => {
+    const libraryOnly = structuredClone(example);
+    libraryOnly.services = [];
+    libraryOnly.timers = [];
+    libraryOnly.checks = [];
+    renderOverview(libraryOnly);
+    expect(screen.queryByRole('region', { name: 'Only system metrics are watched' })).toBeNull();
+    expect(screen.queryByRole('region', { name: /^All quiet/ })).toBeNull();
+    expect(screen.getByText(/Not watching any/).textContent?.replace(/\s+/g, ' ')).toContain(
+      'Not watching any services, timers or checks.',
+    );
+    expect(section('Library')).toBeTruthy();
   });
 });

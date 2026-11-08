@@ -82,6 +82,16 @@ export function collectProblems(overview: Overview): Problem[] {
   for (const c of overview.checks) {
     add('check', c.name, c.name, c.health, fallback(c.health, c.message));
   }
+  const library = overview.library;
+  if (library) {
+    add(
+      'library',
+      'library',
+      library.name,
+      library.health,
+      fallback(library.health, library.message),
+    );
+  }
 
   return sortBySeverity(problems);
 }

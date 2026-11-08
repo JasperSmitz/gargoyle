@@ -7,6 +7,7 @@ const ROUTES = [
   { name: 'overview', pattern: '/' },
   { name: 'system', pattern: '/system' },
   { name: 'events', pattern: '/events' },
+  { name: 'library', pattern: '/library' },
   { name: 'service', pattern: '/services/:unit' },
   { name: 'timer', pattern: '/timers/:unit' },
   { name: 'check', pattern: '/checks/:name' },
@@ -80,7 +81,10 @@ export function hrefWithQuery(
   return href(...parts) + (encoded ? `?${encoded}` : '');
 }
 
-/** Where a target is shown in detail. System targets (`cpu`, `disk:/`) all live on the System page. */
+/**
+ * Where a target is shown in detail. System targets (`cpu`, `disk:/`) all live on the System page;
+ * the library is a single target (`library`) with its own page.
+ */
 export function targetHref(kind: TargetKind, target: string): string {
   switch (kind) {
     case 'service':
@@ -91,6 +95,8 @@ export function targetHref(kind: TargetKind, target: string): string {
       return href('system');
     case 'check':
       return href('checks', target);
+    case 'library':
+      return href('library');
   }
 }
 

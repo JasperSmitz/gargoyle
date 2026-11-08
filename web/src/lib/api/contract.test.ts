@@ -4,10 +4,13 @@ import { fixtures } from './fixtures';
 import {
   CHECK_KINDS,
   HEALTH_STATES,
+  ISSUE_SCOPES,
   RESOLUTIONS,
   RUN_SOURCES,
   SERIES_UNITS,
+  SEVERITIES,
   TARGET_KINDS,
+  WARN_ON,
   type CheckSummary,
   type HealthEvent,
   type ServiceSummary,
@@ -37,13 +40,24 @@ describe('contract examples', () => {
   it.each([
     ['health', HEALTH_STATES],
     ['targetKind', TARGET_KINDS],
-    ['kind', CHECK_KINDS],
     ['source', RUN_SOURCES],
     ['resolution', RESOLUTIONS],
+    ['severity', SEVERITIES],
+    ['minSeverity', SEVERITIES],
+    ['scope', ISSUE_SCOPES],
+    ['warnOn', WARN_ON],
   ] as const)('uses only known values for "%s"', (key, allowed) => {
     const values = valuesOf(all, key);
     expect(values.length).toBeGreaterThan(0);
     for (const value of values) expect(allowed).toContain(value);
+  });
+
+  // `kind` is closed for checks only; a library error `kind` (`corrupt`, ...) is an open set.
+  it('uses only check kinds for checks', () => {
+    const checks = [...valuesOf(all, 'checks'), ...valuesOf(all, 'check')].flat();
+    const kinds = valuesOf(checks, 'kind');
+    expect(kinds.length).toBeGreaterThan(0);
+    for (const kind of kinds) expect(CHECK_KINDS).toContain(kind);
   });
 
   // `from`/`to` also name the metrics-query time range, so only look inside event lists.
@@ -65,7 +79,17 @@ describe('contract examples', () => {
   });
 
   it('uses integer unix seconds for timestamps', () => {
-    const keys = ['ts', 'since', 'bootTime', 'lastCheck', 'nextRun', 'startedAt', 'finishedAt'];
+    const keys = [
+      'ts',
+      'since',
+      'bootTime',
+      'lastCheck',
+      'nextRun',
+      'startedAt',
+      'finishedAt',
+      'checkedAt',
+      'generatedAt',
+    ];
     for (const key of keys) {
       for (const value of valuesOf(all, key)) {
         if (value !== null) expect(Number.isInteger(value), `${key}=${String(value)}`).toBe(true);
@@ -82,7 +106,8 @@ describe('contract examples', () => {
 
   it('counts each overview target exactly once', () => {
     const o = fixtures['overview.json'];
-    const targets = 1 + o.services.length + o.timers.length + o.checks.length;
+    const library = o.library === null ? 0 : 1;
+    const targets = 1 + o.services.length + o.timers.length + o.checks.length + library;
     const counted = Object.values(o.counts).reduce((sum, n) => sum + n, 0);
     expect(counted).toBe(targets);
     expect(Object.keys(o.counts).sort()).toEqual([...HEALTH_STATES].sort());
@@ -115,6 +140,42 @@ describe('contract examples', () => {
   it('reports health ok with a version', () => {
     expect(fixtures['health.json'].status).toBe('ok');
     expect(fixtures['health.json'].version).toMatch(/^\d+\.\d+\.\d+/);
+  });
+});
+
+describe('library examples', () => {
+  const configured = fixtures['library.json'];
+  const unconfigured = fixtures['library-unconfigured.json'];
+
+  it('carries the same summary as the overview', () => {
+    expect(configured.configured).toBe(true);
+    expect(configured.library).toEqual(fixtures['overview.json'].library);
+  });
+
+  it('is all null without [library]', () => {
+    expect(unconfigured).toEqual({
+      host: 'debian-box',
+      configured: false,
+      library: null,
+      report: null,
+    });
+  });
+
+  it('orders issues by severity and keeps the counts consistent', () => {
+    const report = configured.report!;
+    const rank = { error: 0, warning: 1, info: 2 };
+    for (const album of report.albums) {
+      const ranks = album.issues.map((i) => rank[i.severity]);
+      expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+      for (const issue of album.issues) {
+        expect(issue.scope).not.toBe('library');
+        expect(issue.pathsTotal).toBeGreaterThanOrEqual(issue.paths.length);
+      }
+    }
+    for (const issue of report.libraryIssues) expect(issue.scope).toBe('library');
+    const kept = report.albums.flatMap((a) => a.issues).length + report.libraryIssues.length;
+    expect(kept).toBe(report.issuesTotal);
+    expect(report.errors).toHaveLength(report.errorsTotal);
   });
 });
 

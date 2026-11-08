@@ -75,12 +75,13 @@ describe('EventsPage', () => {
   it('renders the contract example, newest first, with links to targets', async () => {
     await renderPage(backendOver(fixtures['events.json'].events));
     const items = rows();
-    expect(items).toHaveLength(3);
+    expect(items).toHaveLength(4);
     expect(items[0]?.textContent).toContain('minecraft.service');
     expect(within(items[0]!).getByRole('link').getAttribute('href')).toBe(
       '#/services/minecraft.service',
     );
     expect(within(items[2]!).getByRole('link').getAttribute('href')).toBe('#/system');
+    expect(within(items[3]!).getByRole('link').getAttribute('href')).toBe('#/library');
     // Only an empty page ends the log, so one more request settles it.
     await fireEvent.click(screen.getByRole('button', { name: 'Load older events' }));
     await vi.advanceTimersByTimeAsync(0);
@@ -155,6 +156,27 @@ describe('EventsPage', () => {
     expect(offered).toEqual(['All targets', 'backup.timer', 'music-sync.timer']);
   });
 
+  it('filters by the library kind', async () => {
+    const client = await renderPage(backendOver(fixtures['events.json'].events), {
+      kind: 'library',
+      target: null,
+    });
+    expect(client.events).toHaveBeenCalledWith(
+      { limit: 10, target: undefined, kind: 'library' },
+      expect.anything(),
+    );
+    const kinds = within(screen.getByRole('combobox', { name: 'Kind' }))
+      .getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(kinds).toContain('Library');
+    expect(rows()).toHaveLength(1);
+    expect(within(rows()[0]!).getByRole('link').getAttribute('href')).toBe('#/library');
+    const offered = within(screen.getByRole('combobox', { name: 'Target' }))
+      .getAllByRole('option')
+      .map((o) => o.textContent);
+    expect(offered).toEqual(['All targets', 'library']);
+  });
+
   it('puts filter changes in the URL, dropping a target of another kind', async () => {
     await renderPage(backendOver(log(6)), { kind: null, target: 'minecraft.service' });
     await fireEvent.change(screen.getByRole('combobox', { name: 'Kind' }), {
@@ -190,7 +212,7 @@ describe('EventsPage', () => {
     client.events.mockResolvedValue(fixtures['events.json']);
     await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(rows()).toHaveLength(3);
+    expect(rows()).toHaveLength(4);
   });
 
   it('reports a failed older page without losing what is shown', async () => {
