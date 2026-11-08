@@ -20,6 +20,9 @@ function clientWith(overview: (opts?: { signal?: AbortSignal }) => Promise<Overv
     metricsQuery: vi.fn(async (_query: Parameters<ApiClient['metricsQuery']>[0]) => {
       return fixtures['metrics-query.json'];
     }),
+    service: vi.fn(async () => fixtures['service-detail.json']),
+    timer: vi.fn(async () => fixtures['timer-detail.json']),
+    events: vi.fn(async () => fixtures['events.json']),
   };
 }
 
@@ -125,5 +128,43 @@ describe('App', () => {
     const client = clientWith(async () => fixtures['overview.json']);
     render(App, { client, visibility: visible });
     expect(screen.getByText('Page not found')).toBeTruthy();
+  });
+
+  it('routes #/timers/:unit to the timer page and switches when the unit changes', async () => {
+    location.hash = '#/timers/music-sync.timer';
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.timer).toHaveBeenCalledWith('music-sync.timer', { limit: 50 }, expect.anything());
+    expect(screen.getByRole('heading', { level: 1, name: 'Music sync' })).toBeTruthy();
+
+    client.timer.mockRejectedValue(new ApiRequestError('not_found', 'unknown timer', 404));
+    location.hash = '#/timers/other.timer';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.timer).toHaveBeenLastCalledWith('other.timer', { limit: 50 }, expect.anything());
+    expect(screen.getByText('No timer called other.timer')).toBeTruthy();
+  });
+
+  it('routes #/services/:unit to the service page', async () => {
+    location.hash = '#/services/minecraft.service?range=7d';
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.service).toHaveBeenCalledWith('minecraft.service', expect.anything());
+    expect(screen.getByRole('heading', { level: 1, name: 'Minecraft' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '7d' }).getAttribute('aria-current')).toBe('true');
+  });
+
+  it('routes #/events with its filters and marks the nav entry', async () => {
+    location.hash = '#/events?target=minecraft.service';
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByRole('link', { name: 'Events' }).getAttribute('aria-current')).toBe('page');
+    expect(client.events).toHaveBeenCalledWith(
+      { limit: 50, target: 'minecraft.service', kind: undefined },
+      expect.anything(),
+    );
   });
 });

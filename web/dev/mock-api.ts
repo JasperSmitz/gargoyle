@@ -4,25 +4,31 @@
 // here can reach the production bundle (or the config loader).
 //
 // Metrics are generated (see mock-metrics.ts) for whatever window is asked, so the System page
-// works for every range. The overview is lightly animated (fresh timestamps, wandering CPU and memory) so polling and
-// "updated Xs ago" can be seen working. `VITE_MOCK=offline` answers 503 everywhere instead, to
-// see the offline banner.
+// works for every range. Timers, runs and events are generated too (mock-units.ts), so detail
+// pages, countdowns and event paging work. The overview is lightly animated (fresh timestamps,
+// wandering CPU and memory) so polling and "updated Xs ago" can be seen working.
+// `VITE_MOCK=offline` answers 503 everywhere instead, to see the offline banner.
 
 import { fixtures } from '../src/lib/api/fixtures';
-import type { Overview } from '../src/lib/api/types';
+import {
+  TARGET_KINDS,
+  type Health,
+  type HealthCounts,
+  type Overview,
+  type ServiceSummary,
+} from '../src/lib/api/types';
+import { worst } from '../src/lib/health';
 import { QueryError, query, seriesInfo } from './mock-metrics';
+import { events, timerDetail, timers } from './mock-units';
 
 type Fixture = keyof typeof fixtures;
 
+const HOST = 'debian-box';
+
 const ROUTES: [RegExp, Fixture][] = [
   [/^\/health$/, 'health.json'],
-  [/^\/services$/, 'services.json'],
-  [/^\/services\/[^/]+$/, 'service-detail.json'],
-  [/^\/timers$/, 'timers.json'],
-  [/^\/timers\/[^/]+$/, 'timer-detail.json'],
   [/^\/checks$/, 'checks.json'],
   [/^\/checks\/[^/]+$/, 'check-detail.json'],
-  [/^\/events$/, 'events.json'],
 ];
 
 export interface MockResponse {
@@ -43,25 +49,77 @@ export function respond(
       body: { error: { code: 'unavailable', message: 'mock backend is offline' } },
     };
   }
-  if (path === '/overview') return { status: 200, body: liveOverview() };
-  if (path === '/metrics')
-    return { status: 200, body: { host: 'debian-box', series: seriesInfo() } };
+  if (path === '/overview') return { status: 200, body: liveOverview(now) };
+  if (path === '/metrics') return { status: 200, body: { host: HOST, series: seriesInfo() } };
   if (path === '/metrics/query') {
     try {
       return { status: 200, body: query(params, now) };
     } catch (error) {
       if (!(error instanceof QueryError)) throw error;
-      return { status: 400, body: { error: { code: 'bad_request', message: error.message } } };
+      return { status: 400, body: { error: { code: error.code, message: error.message } } };
     }
   }
+  const units = unitsResponse(path, params, now);
+  if (units) return units;
   const match = ROUTES.find(([pattern]) => pattern.test(path));
   if (match) return { status: 200, body: fixtures[match[1]] };
   return { status: 404, body: { error: { code: 'not_found', message: `no mock for ${path}` } } };
 }
 
-function liveOverview(): Overview {
+function notFound(what: string): MockResponse {
+  return { status: 404, body: { error: { code: 'not_found', message: `unknown ${what}` } } };
+}
+
+/** `/services…`, `/timers…` and `/events`, or null for other paths. */
+function unitsResponse(path: string, params: URLSearchParams, now: number): MockResponse | null {
+  const t = Math.floor(now);
+  const services = liveServices(t);
+  if (path === '/services') return { status: 200, body: { host: HOST, services } };
+  if (path === '/timers') return { status: 200, body: { host: HOST, timers: timers(t) } };
+  if (path === '/events') {
+    const body = {
+      host: HOST,
+      events: events(t, services, {
+        since: intParam(params, 'since'),
+        until: intParam(params, 'until'),
+        target: params.get('target') ?? undefined,
+        kind: TARGET_KINDS.find((k) => k === params.get('kind')),
+        limit: intParam(params, 'limit'),
+      }),
+    };
+    return { status: 200, body };
+  }
+  const [, collection, encoded] = /^\/(services|timers)\/([^/]+)$/.exec(path) ?? [];
+  if (!collection || !encoded) return null;
+  const unit = decodeURIComponent(encoded);
+  const unitEvents = events(t, services, { target: unit, limit: 20 });
+  if (collection === 'services') {
+    const service = services.find((s) => s.unit === unit);
+    if (!service) return notFound('service');
+    return { status: 200, body: { host: HOST, service, events: unitEvents } };
+  }
+  const detail = timerDetail(unit, t, intParam(params, 'limit') ?? 50);
+  if (!detail) return notFound('timer');
+  return { status: 200, body: { host: HOST, ...detail, events: unitEvents } };
+}
+
+function intParam(params: URLSearchParams, name: string): number | undefined {
+  const value = params.get(name);
+  return value !== null && /^\d+$/.test(value) ? Number(value) : undefined;
+}
+
+/** The example's services, with times moved so they read the same relative to `now`. */
+function liveServices(now: number): ServiceSummary[] {
+  const shift = now - fixtures['overview.json'].ts;
+  return fixtures['overview.json'].services.map((s) => ({
+    ...s,
+    since: s.since === null ? null : s.since + shift,
+  }));
+}
+
+function liveOverview(at: number): Overview {
   const overview = structuredClone(fixtures['overview.json']);
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(at);
   const shift = now - overview.ts;
   const wave = Math.sin(now / 40);
 
@@ -79,17 +137,21 @@ function liveOverview(): Overview {
     net.txBps = Math.round(net.txBps * (1 + 0.3 * wave + Math.random() * 0.3));
   }
 
-  // Keep relative times ("2h ago", "next in 21h") as they read in the example.
-  for (const s of overview.services) if (s.since !== null) s.since += shift;
-  for (const t of overview.timers) {
-    if (t.nextRun !== null) t.nextRun += shift;
-    if (t.lastRun) {
-      t.lastRun.startedAt += shift;
-      if (t.lastRun.finishedAt !== null) t.lastRun.finishedAt += shift;
-    }
-  }
+  // Keep relative times ("2h ago") as they read in the example.
+  overview.services = liveServices(now);
   for (const c of overview.checks) if (c.lastCheck !== null) c.lastCheck += shift;
-  for (const e of overview.recentEvents) e.ts += shift;
+  overview.timers = timers(now);
+  overview.recentEvents = events(now, overview.services, { limit: 10 });
+
+  // The generated timers differ from the example's, so health and counts are recomputed.
+  const targets: Health[] = [
+    overview.system.health,
+    ...[...overview.services, ...overview.timers, ...overview.checks].map((t) => t.health),
+  ];
+  const counts: HealthCounts = { healthy: 0, warning: 0, critical: 0, unknown: 0 };
+  for (const health of targets) counts[health] += 1;
+  overview.counts = counts;
+  overview.health = worst(targets);
   return overview;
 }
 

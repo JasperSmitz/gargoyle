@@ -25,6 +25,7 @@
     bytes_per_s: 1024,
     celsius: 5,
     ms: 5,
+    count: 1,
   };
 
   const geometry = $derived(sparklinePath(values, WIDTH, HEIGHT, MIN_SPAN[unit]));

@@ -16,6 +16,8 @@ describe('formatValue', () => {
     ['ms', 3.14, '3.1 ms'],
     ['ms', 42.6, '43 ms'],
     ['ms', 1530, '1.53 s'],
+    ['count', 3, '3'],
+    ['count', 2.5, '2.5'],
   ] as const)('%s %d → %s', (unit, value, text) => {
     expect(formatValue(unit, value)).toBe(text);
   });
@@ -81,5 +83,19 @@ describe('yRange', () => {
   it('frames temperatures in 10-degree steps around the data', () => {
     expect(yRange('celsius', 41, 63)).toEqual([30, 70]);
     expect(yRange('celsius', 2, 8)).toEqual([0, 20]);
+  });
+});
+
+describe('count unit', () => {
+  it('ticks on whole numbers only', () => {
+    const incrs = axisIncrements('count') ?? [];
+    expect(incrs.slice(0, 3)).toEqual([1, 2, 5]);
+    expect(incrs.every(Number.isInteger)).toBe(true);
+    expect(formatAxisTicks('count', [0, 1, 2])).toEqual(['0', '1', '2']);
+  });
+
+  it('starts at zero with room for at least one', () => {
+    expect(yRange('count', 0, 0)).toEqual([0, 1]);
+    expect(yRange('count', 0, 10)).toEqual([0, 11]);
   });
 });

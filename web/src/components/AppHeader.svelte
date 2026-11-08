@@ -26,6 +26,7 @@
   const NAV: { route: RouteName; label: string; href: string }[] = [
     { route: 'overview', label: 'Overview', href: href() },
     { route: 'system', label: 'System', href: href('system') },
+    { route: 'events', label: 'Events', href: href('events') },
   ];
 </script>
 

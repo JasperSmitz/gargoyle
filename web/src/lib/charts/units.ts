@@ -1,5 +1,5 @@
 // Unit-aware formatting and scales for charts. Units are the contract's series units
-// (ARCHITECTURE §5): percent 0–100, bytes, bytes_per_s, celsius, load and ms.
+// (ARCHITECTURE §5): percent 0–100, bytes, bytes_per_s, celsius, load, ms and count (integers).
 
 import type { SeriesUnit } from '../api/types';
 import { PLACEHOLDER, formatBytes, formatLoad, formatPercent } from '../format';
@@ -20,7 +20,14 @@ export function formatValue(unit: SeriesUnit, value: number | null): string {
       return formatLoad(value);
     case 'ms':
       return formatMs(value);
+    case 'count':
+      return formatCount(value);
   }
+}
+
+/** Whole numbers as such; a bucket average of a count can be fractional, so keep one decimal. */
+function formatCount(count: number): string {
+  return Number.isInteger(count) ? String(count) : count.toFixed(1);
 }
 
 function formatMs(ms: number): string {
@@ -49,6 +56,7 @@ export function formatAxisTicks(unit: SeriesUnit, ticks: readonly number[]): str
     case 'celsius':
       return ticks.map((t) => `${trim(t)} °C`);
     case 'load':
+    case 'count':
       return ticks.map((t) => trim(t));
     case 'ms': {
       const seconds = Math.max(0, ...ticks) >= 1000;
@@ -62,14 +70,17 @@ function trim(value: number): string {
   return String(Number(value.toFixed(2)));
 }
 
+const STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500];
+
 /**
  * Tick increments for byte axes, so ticks land on round binary sizes (500 MiB, 1 GiB, 2 GiB) instead of
- * decimal ones that would print as `953.7 MiB`. Other units use uPlot's decimal increments.
+ * decimal ones that would print as `953.7 MiB`; counts tick on whole numbers only (no `0.5`
+ * restarts). Other units use uPlot's decimal increments.
  */
 export function axisIncrements(unit: SeriesUnit): number[] | undefined {
+  if (unit === 'count') return [...STEPS, ...STEPS.map((s) => s * 1000), 1e6];
   if (unit !== 'bytes' && unit !== 'bytes_per_s') return undefined;
-  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500];
-  return IEC.flatMap((_, power) => steps.map((s) => s * 1024 ** power));
+  return IEC.flatMap((_, power) => STEPS.map((s) => s * 1024 ** power));
 }
 
 /** Smallest y extent per unit, so a flat idle series does not blow noise up to full height. */
@@ -78,6 +89,7 @@ const MIN_EXTENT: Record<Exclude<SeriesUnit, 'percent' | 'celsius'>, number> = {
   bytes_per_s: 1024,
   load: 1,
   ms: 10,
+  count: 1,
 };
 
 /**

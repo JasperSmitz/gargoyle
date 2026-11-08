@@ -2,6 +2,7 @@
   import type { ServiceSummary } from '../../lib/api/types';
   import { formatBytes, formatDuration, formatTimestamp } from '../../lib/format';
   import { sortBySeverity } from '../../lib/health';
+  import { href } from '../../lib/router';
   import CardList from '../CardList.svelte';
   import EmptyState from '../EmptyState.svelte';
   import Section from '../Section.svelte';
@@ -26,6 +27,7 @@
           id={service.unit}
           health={service.health}
           message={service.message}
+          href={href('services', service.unit)}
         >
           {#snippet meta()}
             <span>{service.activeState} ({service.subState})</span>

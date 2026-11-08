@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hashQuery, href, hrefWithQuery, matchPattern, parseHash } from './router';
+import { hashQuery, href, hrefWithQuery, matchPattern, parseHash, targetHref } from './router';
 
 describe('parseHash', () => {
   it.each(['', '#', '#/', '#//', '#/?x=1'])('%j is the overview', (hash) => {
@@ -8,6 +8,14 @@ describe('parseHash', () => {
 
   it('routes the System page, ignoring its query', () => {
     expect(parseHash('#/system?range=7d')).toEqual({ name: 'system', params: {}, path: '/system' });
+  });
+
+  it.each([
+    ['#/timers/music-sync.timer', 'timer', { unit: 'music-sync.timer' }],
+    ['#/services/my%40x.service', 'service', { unit: 'my@x.service' }],
+    ['#/events?target=a.timer', 'events', {}],
+  ])('routes %s to the %s page', (hash, name, params) => {
+    expect(parseHash(hash)).toMatchObject({ name, params });
   });
 
   it('reports unknown paths as not-found, normalised', () => {
@@ -49,5 +57,16 @@ describe('hash query', () => {
   it('builds links with a query and skips unset values', () => {
     expect(hrefWithQuery(['system'], { range: '30d', other: null })).toBe('#/system?range=30d');
     expect(hrefWithQuery(['system'], {})).toBe('#/system');
+  });
+});
+
+describe('targetHref', () => {
+  it.each([
+    ['service', 'nginx.service', '#/services/nginx.service'],
+    ['timer', 'a@b.timer', '#/timers/a%40b.timer'],
+    ['system', 'disk:/', '#/system'],
+    ['check', 'Music HTTP', null],
+  ] as const)('%s %s -> %s', (kind, target, expected) => {
+    expect(targetHref(kind, target)).toBe(expected);
   });
 });
