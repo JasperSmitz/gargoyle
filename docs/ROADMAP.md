@@ -12,6 +12,18 @@ and `docs/api/examples/`) is fixed in M0. After M0, backend and frontend work pr
 against it. Contract changes need a coordinator decision and must update docs, examples and DTOs in
 the same change.
 
+## Status
+
+| Milestone | Status |
+|---|---|
+| M0 Foundation | ✅ Done (2026-11-08) |
+| M1 Live dashboard | 🚧 In progress |
+| M2 History & charts | Planned |
+| M3 Timers & events | Planned |
+| M4 Checks & health polish | Planned |
+| M5 Security hardening | Planned |
+| M6 Packaging & docs | Planned |
+
 ---
 
 ## M0 — Foundation
@@ -44,13 +56,13 @@ the same change.
 
 **Acceptance**
 
-- [ ] On a fresh clone, `make check` runs fmt-check, clippy `-D warnings`, cargo tests, svelte-check,
+- [x] On a fresh clone, `make check` runs fmt-check, clippy `-D warnings`, cargo tests, svelte-check,
       vitest and prettier-check, and all pass.
-- [ ] `cargo run -- --config config/gargoyle.dev.toml` serves `/api/v1/health` →
+- [x] `cargo run -- --config config/gargoyle.dev.toml` serves `/api/v1/health` →
       `{"status":"ok","version":...}` on 127.0.0.1:9077.
-- [ ] With `listen = "0.0.0.0:9077"` and auth `none`, startup exits non-zero with a clear message.
-- [ ] `gargoyle check-config` reports **all** errors in a deliberately broken config.
-- [ ] Every example JSON round-trips through the Rust DTOs. Each one also type-checks as its TS
+- [x] With `listen = "0.0.0.0:9077"` and auth `none`, startup exits non-zero with a clear message.
+- [x] `gargoyle check-config` reports **all** errors in a deliberately broken config.
+- [x] Every example JSON round-trips through the Rust DTOs. Each one also type-checks as its TS
       type.
 
 ---
