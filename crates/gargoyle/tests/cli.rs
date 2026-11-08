@@ -112,8 +112,20 @@ fn missing_config_file_is_a_clear_error() {
 }
 
 #[test]
-fn hash_password_is_a_stub_for_now() {
-    let out = gargoyle(&["hash-password"]);
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not implemented"));
+fn run_refuses_an_unreadable_password_hash_file() {
+    let path = temp_config(
+        "hashfile",
+        "[auth]\nmode = \"basic\"\npassword_hash_file = \"/nonexistent/gargoyle-password\"\n",
+    );
+    // The hash is loaded before the database is opened or a socket is bound, and check-config
+    // reads it too.
+    for args in [&[][..], &["check-config"]] {
+        let mut args = args.to_vec();
+        args.extend(["--config", path.to_str().unwrap()]);
+        let out = gargoyle(&args);
+        assert!(!out.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("password_hash_file"), "{args:?}: {stderr}");
+    }
+    std::fs::remove_file(&path).ok();
 }

@@ -15,13 +15,31 @@ listen = "127.0.0.1:9077"
 allow_unauthenticated_remote = false
 
 [auth]
-# "none" or "basic" (HTTP Basic auth, single user). /api/v1/health never requires auth.
+# "none" or "basic" (HTTP Basic auth, single user). With "basic", every page, asset and API
+# endpoint asks for the password, except /api/v1/health (for uptime probes; it shows only the
+# version). Basic auth sends the password with every request: outside localhost, use it only
+# behind a TLS reverse proxy or on a VPN.
+#
+# Use a long random password (20+ characters, from a password manager). Gargoyle caps guessing
+# at about 10 attempts per second for everyone together, which is harmless to such a password
+# but not to a short one.
+#
+# Setup:
+#   1. gargoyle hash-password            # prompts twice, without echo; prints the hash
+#      (or: printf '%s\n' "$PW" | gargoyle hash-password, which reads the first line of stdin)
+#   2. Put the printed string in password_hash below, or in its own file:
+#        gargoyle hash-password > /etc/gargoyle/password
+#        chown root:gargoyle /etc/gargoyle/password && chmod 640 /etc/gargoyle/password
+#      and set password_hash_file. Gargoyle warns at startup if that file is world-readable.
+#   3. Set mode = "basic" and restart. Changing the password needs a restart too.
+# Wrong passwords are answered after a 1s delay.
 mode = "none"
 username = "admin"
 # argon2id PHC string printed by `gargoyle hash-password`. Required when mode = "basic", unless
 # password_hash_file is set instead (set exactly one of the two).
 # password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
-# File containing only the PHC string; keeps the hash out of this file.
+# File containing only the PHC string (surrounding whitespace is ignored); keeps the hash out of
+# this file. Read once at startup.
 # password_hash_file = "/etc/gargoyle/password"
 
 [storage]

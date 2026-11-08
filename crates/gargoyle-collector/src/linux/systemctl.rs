@@ -271,6 +271,50 @@ mod tests {
                 "{p} may expose command lines"
             );
             assert!(!p.contains("Environment"), "{p}");
+            assert!(!p.contains("Credential"), "{p}");
+        }
+    }
+
+    /// The whitelist is enforced in one place: `run_show` is the only code that runs systemctl
+    /// or passes a property list, and `units_through_fake_systemctl` (tests/linux_collector.rs)
+    /// checks its exact argv against [`PROPERTIES`]. This scans every source file of the
+    /// collector and the binary for a second way in.
+    #[test]
+    fn properties_are_requested_only_by_run_show() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        // Built at run time so this file does not match itself.
+        let property_flag = ["\"-", "p\""].concat();
+        let long_flag = ["--", "property"].concat();
+        let spawn = ["Command::new(", "systemctl"].concat();
+        let mut sources = Vec::new();
+        for krate in ["gargoyle-collector/src", "gargoyle/src"] {
+            collect_rs(&crates.join(krate), &mut sources);
+        }
+        assert!(sources.len() > 10, "found the sources: {sources:?}");
+        let mut hits = Vec::new();
+        for path in &sources {
+            let text = std::fs::read_to_string(path).expect("readable source");
+            for needle in [&property_flag, &long_flag, &spawn] {
+                for _ in text.matches(needle.as_str()) {
+                    hits.push(format!("{}: {needle}", path.display()));
+                }
+            }
+        }
+        assert_eq!(hits.len(), 2, "{hits:#?}");
+        assert!(
+            hits.iter().all(|h| h.contains("linux/systemctl.rs")),
+            "{hits:#?}"
+        );
+    }
+
+    fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                collect_rs(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
         }
     }
 

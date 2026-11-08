@@ -1,6 +1,8 @@
 //! The `gargoyle` binary: CLI, scheduler, storage and HTTP server.
 
+mod auth;
 mod checks;
+mod hash_password;
 mod http;
 mod scheduler;
 mod state;
@@ -47,7 +49,8 @@ enum Command {
     Run,
     /// Validate the config file, print every problem found, and exit.
     CheckConfig,
-    /// Hash a password for `[auth] password_hash`.
+    /// Hash a password for `[auth] password_hash`: prompts on a terminal, otherwise reads the
+    /// first line of stdin. Prints the argon2id PHC string.
     HashPassword,
 }
 
@@ -58,9 +61,7 @@ fn main() -> ExitCode {
     let result = match cli.command.unwrap_or(Command::Run) {
         Command::Run => run(&cli.config),
         Command::CheckConfig => check_config(&cli.config),
-        Command::HashPassword => Err(anyhow::anyhow!(
-            "hash-password is not implemented yet (ROADMAP M5.2)"
-        )),
+        Command::HashPassword => hash_password::run(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -89,7 +90,9 @@ fn load_config(path: &Path) -> anyhow::Result<Config> {
 }
 
 fn check_config(path: &Path) -> anyhow::Result<()> {
-    load_config(path)?;
+    let config = load_config(path)?;
+    // Also parses the hash and reads password_hash_file, as `run` would.
+    auth::Authenticator::from_config(&config.auth)?;
     println!("{}: OK", path.display());
     Ok(())
 }
@@ -105,6 +108,9 @@ fn run(path: &Path) -> anyhow::Result<()> {
             "serving on a non-loopback address WITHOUT authentication (allow_unauthenticated_remote = true)"
         );
     }
+
+    // An unreadable password_hash_file or a bad hash is a startup error, not a 401 later.
+    let auth = auth::Authenticator::from_config(&config.auth)?;
 
     // An unusable database is a startup error (wrong path or permissions should be noticed);
     // failures after this point only cost history, never live data.
@@ -122,7 +128,7 @@ fn run(path: &Path) -> anyhow::Result<()> {
             );
         }
         let loops = scheduler::spawn(&shared)?;
-        let result = http::serve(listen, shared).await;
+        let result = http::serve(listen, shared, auth).await;
         // No new ticks during shutdown, also when binding failed.
         for task in &loops {
             task.abort();
