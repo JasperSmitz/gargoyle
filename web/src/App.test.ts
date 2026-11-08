@@ -2,15 +2,25 @@
 import { render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
-import { ApiRequestError } from './lib/api/client';
+import { ApiRequestError, type ApiClient } from './lib/api/client';
 import { fixtures } from './lib/api/fixtures';
 import type { Overview } from './lib/api/types';
 import type { Visibility } from './lib/poller';
+import { installResizeObserver } from './test/fake-uplot';
+
+vi.mock('uplot', () => import('./test/fake-uplot'));
+installResizeObserver();
 
 const visible: Visibility = { isHidden: () => false, subscribe: () => () => {} };
 
 function clientWith(overview: (opts?: { signal?: AbortSignal }) => Promise<Overview>) {
-  return { overview: vi.fn(overview) };
+  return {
+    overview: vi.fn(overview),
+    metrics: vi.fn(async () => fixtures['metrics.json']),
+    metricsQuery: vi.fn(async (_query: Parameters<ApiClient['metricsQuery']>[0]) => {
+      return fixtures['metrics-query.json'];
+    }),
+  };
 }
 
 describe('App', () => {
@@ -86,6 +96,28 @@ describe('App', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(screen.getByRole('alert').textContent).toContain('Server error');
     expect(screen.queryByRole('status', { name: 'Loading overview' })).toBeNull();
+  });
+
+  it('loads last-hour sparklines on the overview only', async () => {
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.metricsQuery).toHaveBeenCalledOnce();
+    const query = client.metricsQuery.mock.calls[0]?.[0];
+    expect(query?.keys).toEqual(['cpu.usage', 'load.1', 'mem.used', 'disk.used:*']);
+    expect((query?.to ?? 0) - (query?.from ?? 0)).toBe(3600);
+    expect(screen.getByRole('img', { name: /^CPU usage, last hour/ })).toBeTruthy();
+  });
+
+  it('routes #/system to the System page with the range from the URL and marks the nav', async () => {
+    location.hash = '#/system?range=7d';
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByRole('heading', { level: 1, name: 'System' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'System' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: '7d' }).getAttribute('aria-current')).toBe('true');
+    expect(client.metrics).toHaveBeenCalled();
   });
 
   it('routes unknown hashes to a not-found page', async () => {

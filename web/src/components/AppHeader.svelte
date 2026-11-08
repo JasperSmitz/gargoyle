@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Health } from '../lib/api/types';
   import { formatRelativeTime, formatTimestamp } from '../lib/format';
-  import { href } from '../lib/router';
+  import { href, type RouteName } from '../lib/router';
   import GargoyleMark from './GargoyleMark.svelte';
   import HealthBadge from './HealthBadge.svelte';
 
@@ -11,6 +11,7 @@
     receivedAt,
     now,
     stale,
+    route,
   }: {
     host: string | null;
     health: Health | null;
@@ -19,7 +20,13 @@
     /** Client clock, ticking. */
     now: number;
     stale: boolean;
+    route: RouteName;
   } = $props();
+
+  const NAV: { route: RouteName; label: string; href: string }[] = [
+    { route: 'overview', label: 'Overview', href: href() },
+    { route: 'system', label: 'System', href: href('system') },
+  ];
 </script>
 
 <header class="header">
@@ -31,6 +38,12 @@
     {#if host}
       <span class="host" title="Host">{host}</span>
     {/if}
+    <nav class="nav" aria-label="Main">
+      {#each NAV as item (item.route)}
+        <a href={item.href} aria-current={item.route === route ? 'page' : undefined}>{item.label}</a
+        >
+      {/each}
+    </nav>
     <div class="status">
       {#if receivedAt !== null}
         <span class="updated" class:stale title="Last updated {formatTimestamp(receivedAt)}">
@@ -88,6 +101,31 @@
     font-size: var(--text-sm);
     color: var(--color-text-muted);
     overflow-wrap: anywhere;
+  }
+
+  .nav {
+    display: flex;
+    gap: var(--space-1);
+  }
+
+  .nav a {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+  }
+
+  .nav a:hover {
+    color: var(--color-text);
+    background: var(--color-surface-sunken);
+  }
+
+  .nav a[aria-current='page'] {
+    color: var(--color-text);
+    font-weight: var(--weight-medium);
+    box-shadow: inset 0 -2px 0 var(--color-accent);
+    border-radius: 0;
   }
 
   .status {

@@ -1,5 +1,10 @@
 <script lang="ts">
   import type { HostInfo, SystemMetrics } from '../../lib/api/types';
+  import type { Column } from '../../lib/charts/data';
+  import { formatValue } from '../../lib/charts/units';
+  import { HEALTH_PRESENTATION, worst } from '../../lib/health';
+  import Sparkline from '../charts/Sparkline.svelte';
+  import HealthIcon from '../HealthIcon.svelte';
   import {
     formatBytes,
     formatDuration,
@@ -15,7 +20,17 @@
     system,
     hostInfo,
     serverNow,
-  }: { system: SystemMetrics; hostInfo: HostInfo; serverNow: number } = $props();
+    history = null,
+  }: {
+    system: SystemMetrics;
+    hostInfo: HostInfo;
+    serverNow: number;
+    /** Last-hour averages by series key; cards without one simply show no sparkline. */
+    history?: Map<string, Column> | null;
+  } = $props();
+
+  const trend = (key: string) => history?.get(key) ?? null;
+  const tempsHealth = $derived(worst(system.temps.map((t) => t.health)));
 
   const { cpu, load, memory } = $derived(system);
   const coresText = $derived(
@@ -33,11 +48,17 @@
   );
 </script>
 
+{#snippet spark(key: string, unit: 'percent' | 'load', label: string)}
+  {@const values = trend(key)}
+  {#if values}<Sparkline {values} {unit} {label} />{/if}
+{/snippet}
+
 <div class="grid">
   {#if sampled}
     <StatCard title="CPU" health={cpu.health}>
       <p class="value">{formatPercent(cpu.usage)}</p>
       <UsageBar percent={cpu.usage} health={cpu.health} label="CPU usage" />
+      {@render spark('cpu.usage', 'percent', 'CPU usage')}
       <p class="detail">iowait {formatPercent(cpu.iowait)}</p>
     </StatCard>
 
@@ -56,12 +77,14 @@
           <dd>{formatLoad(load.fifteen)}</dd>
         </div>
       </dl>
+      {@render spark('load.1', 'load', '1-minute load')}
       <p class="detail">{coresText}</p>
     </StatCard>
 
     <StatCard title="Memory" health={memory.health}>
       <p class="value">{formatPercent(memory.usedPct)}</p>
       <UsageBar percent={memory.usedPct} health={memory.health} label="Memory usage" />
+      {@render spark('mem.used', 'percent', 'Memory usage')}
       <p class="detail">{formatBytes(memory.used)} of {formatBytes(memory.total)}</p>
     </StatCard>
 
@@ -81,6 +104,7 @@
       <StatCard title="Disk {disk.mount}" subtitle={disk.fsType} health={disk.health}>
         <p class="value">{formatPercent(disk.usedPct)}</p>
         <UsageBar percent={disk.usedPct} health={disk.health} label="Disk {disk.mount} usage" />
+        {@render spark(`disk.used:${disk.mount}`, 'percent', `Disk ${disk.mount} usage`)}
         <p class="detail">
           {formatBytes(disk.used)} of {formatBytes(disk.total)} · {formatBytes(
             disk.total - disk.used,
@@ -88,6 +112,39 @@
         </p>
       </StatCard>
     {/each}
+
+    <!-- Rates have no health in the contract; an empty list means not available (§6). -->
+    {#each system.net as net (net.iface)}
+      <StatCard title="Network {net.iface}">
+        <dl class="rates">
+          <div>
+            <dt>Received</dt>
+            <dd class="value">{formatValue('bytes_per_s', net.rxBps)}</dd>
+          </div>
+          <div>
+            <dt>Sent</dt>
+            <dd>{formatValue('bytes_per_s', net.txBps)}</dd>
+          </div>
+        </dl>
+      </StatCard>
+    {/each}
+
+    {#if system.temps.length > 0}
+      <StatCard title="Temperatures" health={tempsHealth}>
+        <ul class="temps">
+          {#each system.temps as temp (temp.label)}
+            <li data-health={temp.health}>
+              <span class="temp-label">{temp.label}</span>
+              <span class="temp-value">{formatValue('celsius', temp.celsius)}</span>
+              <span class="temp-health health-{temp.health}">
+                <HealthIcon health={temp.health} size={14} />
+                <span class="sr-only">{HEALTH_PRESENTATION[temp.health].label}</span>
+              </span>
+            </li>
+          {/each}
+        </ul>
+      </StatCard>
+    {/if}
   {:else}
     <StatCard title="Metrics" health={system.health} wide>
       <p class="value muted">No data yet</p>
@@ -177,6 +234,79 @@
   .load dd:not(.value) {
     font-size: var(--text-lg);
     color: var(--color-text-muted);
+  }
+
+  .rates {
+    display: grid;
+    gap: var(--space-1);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rates div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .rates dt {
+    font-size: var(--text-xs);
+    color: var(--color-text-faint);
+  }
+
+  .rates dd:not(.value) {
+    font-size: var(--text-lg);
+    color: var(--color-text-muted);
+  }
+
+  .rates .value {
+    font-size: var(--text-xl);
+  }
+
+  .temps {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--text-sm);
+  }
+
+  .temps li {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .temp-label {
+    min-width: 0;
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+
+  .temp-value {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .temp-health {
+    display: inline-flex;
+  }
+
+  .health-healthy {
+    color: var(--health-healthy-fg);
+  }
+
+  .health-warning {
+    color: var(--health-warning-fg);
+  }
+
+  .health-critical {
+    color: var(--health-critical-fg);
+  }
+
+  .health-unknown {
+    color: var(--health-unknown-fg);
   }
 
   .facts {

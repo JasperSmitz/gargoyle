@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Overview } from '../lib/api/types';
+  import type { Column } from '../lib/charts/data';
   import CheckList from '../components/overview/CheckList.svelte';
   import EventList from '../components/overview/EventList.svelte';
   import ServiceList from '../components/overview/ServiceList.svelte';
@@ -9,14 +10,23 @@
   import Section from '../components/Section.svelte';
 
   // Order is the hierarchy: verdict and problems, then the system, then each kind of target.
-  let { overview, serverNow }: { overview: Overview; serverNow: number } = $props();
+  let {
+    overview,
+    serverNow,
+    history = null,
+  }: {
+    overview: Overview;
+    serverNow: number;
+    /** Last-hour averages by series key for sparklines; null until loaded (or unavailable). */
+    history?: Map<string, Column> | null;
+  } = $props();
 </script>
 
 <div class="page">
   <StatusSummary {overview} />
 
   <Section title="System">
-    <SystemCards system={overview.system} hostInfo={overview.hostInfo} {serverNow} />
+    <SystemCards system={overview.system} hostInfo={overview.hostInfo} {serverNow} {history} />
   </Section>
 
   <div class="columns">
