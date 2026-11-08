@@ -1,116 +1,83 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { api } from './lib/api/client';
-  import type { HealthResponse } from './lib/api/types';
+  import { onMount, untrack } from 'svelte';
+  import AppHeader from './components/AppHeader.svelte';
+  import EmptyState from './components/EmptyState.svelte';
+  import OverviewSkeleton from './components/OverviewSkeleton.svelte';
+  import StaleBanner from './components/StaleBanner.svelte';
+  import { api, type ApiClient } from './lib/api/client';
+  import { OverviewFeed, describeFeedError } from './lib/overview-feed.svelte';
+  import type { Visibility } from './lib/poller';
+  import { href, parseHash } from './lib/router';
+  import OverviewPage from './pages/OverviewPage.svelte';
 
-  // Placeholder shell (M0.5). M1.6 adds hash routing, the overview page and polling.
-  type Status =
-    | { kind: 'loading' }
-    | { kind: 'ok'; health: HealthResponse }
-    | { kind: 'error'; message: string };
+  // Props exist for tests; the app itself mounts App with none.
+  let {
+    client = api,
+    visibility,
+  }: { client?: Pick<ApiClient, 'overview'>; visibility?: Visibility } = $props();
 
-  let status = $state<Status>({ kind: 'loading' });
+  // The header needs overview data on every page, so the feed lives here rather than in a page.
+  // Test-only props are read once on purpose; they never change after mount.
+  const feed = new OverviewFeed((signal) => client.overview({ signal }), {
+    visibility: untrack(() => visibility),
+  });
 
-  async function load() {
-    status = { kind: 'loading' };
-    try {
-      status = { kind: 'ok', health: await api.health() };
-    } catch (error) {
-      status = { kind: 'error', message: error instanceof Error ? error.message : String(error) };
-    }
-  }
+  let route = $state(parseHash(location.hash));
+  let now = $state(Date.now() / 1000);
 
-  onMount(load);
+  onMount(() => {
+    feed.start();
+    // Relative times ("updated 5s ago") tick between polls.
+    const tick = setInterval(() => (now = Date.now() / 1000), 1000);
+    return () => {
+      feed.stop();
+      clearInterval(tick);
+    };
+  });
+
+  const failure = $derived(feed.error === null ? null : describeFeedError(feed.error));
 </script>
 
-<header class="header">
-  <div class="header-inner">
-    <span class="wordmark">Gargoyle</span>
-  </div>
-</header>
+<svelte:window onhashchange={() => (route = parseHash(location.hash))} />
+
+<AppHeader
+  host={feed.data?.host ?? null}
+  health={feed.data?.health ?? null}
+  receivedAt={feed.receivedAt}
+  {now}
+  stale={failure !== null}
+/>
 
 <main class="main">
-  <section class="card" aria-live="polite" aria-busy={status.kind === 'loading'}>
-    {#if status.kind === 'loading'}
-      <p class="muted">Contacting the server…</p>
-    {:else if status.kind === 'ok'}
-      <h1 class="title">Watching</h1>
-      <p class="muted">
-        Backend reachable · version <code>{status.health.version}</code>
-      </p>
-    {:else}
-      <h1 class="title error">Server unreachable</h1>
-      <p class="muted">{status.message}</p>
-      <button class="button" type="button" onclick={load}>Retry</button>
+  {#if failure}
+    <StaleBanner
+      title={failure.title}
+      detail={failure.detail}
+      receivedAt={feed.receivedAt}
+      {now}
+      onretry={() => feed.refresh()}
+    />
+  {/if}
+
+  {#if route.name === 'overview'}
+    {#if feed.data}
+      <OverviewPage overview={feed.data} serverNow={now + feed.clockOffset} />
+    {:else if !failure}
+      <OverviewSkeleton />
     {/if}
-  </section>
+  {:else}
+    <EmptyState title="Page not found">
+      Nothing lives at <code>{route.path}</code>. <a href={href()}>Back to the overview</a>
+    </EmptyState>
+  {/if}
 </main>
 
 <style>
-  .header {
-    height: var(--header-height);
-    border-bottom: 1px solid var(--color-border);
-    background: var(--color-surface);
-  }
-
-  .header-inner,
   .main {
+    display: grid;
+    gap: var(--space-5);
     max-width: var(--content-max-width);
     margin: 0 auto;
-    padding-inline: var(--space-4);
-  }
-
-  .header-inner {
-    display: flex;
-    align-items: center;
-    height: 100%;
-  }
-
-  .wordmark {
-    font-size: var(--text-lg);
-    font-weight: var(--weight-semibold);
-    letter-spacing: var(--tracking-wide);
-  }
-
-  .main {
-    padding-block: var(--space-6);
-  }
-
-  .card {
-    display: grid;
-    gap: var(--space-2);
-    justify-items: start;
-    padding: var(--space-5);
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
-  }
-
-  .title {
-    font-size: var(--text-xl);
-  }
-
-  .title.error {
-    color: var(--health-critical-fg);
-  }
-
-  .muted {
-    color: var(--color-text-muted);
-  }
-
-  .button {
-    margin-top: var(--space-2);
-    padding: var(--space-2) var(--space-4);
-    border: 1px solid var(--color-accent);
-    border-radius: var(--radius-md);
-    background: var(--color-accent);
-    color: var(--color-on-accent);
-    cursor: pointer;
-    transition: background-color var(--duration-fast);
-  }
-
-  .button:hover {
-    background: var(--color-accent-hover);
+    padding: var(--space-5) var(--space-4) var(--space-7);
   }
 </style>
