@@ -106,8 +106,12 @@ not configured). The view:
 - issues are ordered by severity (error first), keeping Liner's order within a severity, and
   albums by their worst issue, then id; the **first 500 issues** in that order are kept
   (`issuesTotal`, `issuesTruncated`), at most **50 paths per issue** (`pathsTotal`) and the
-  **first 100 errors** (`errorsTotal`, `errorsTruncated`). The worst response is then a few
-  MB, and a normal one tens of KB;
+  **first 100 errors** (`errorsTotal`, `errorsTruncated`). These arrays are cut while parsing
+  (a capped serde visitor), not after, so a report within 32 MiB cannot take many times that in
+  memory; `issues_by_code` is limited to 1000 codes. Every report string is cut to 1 KiB (4 KiB
+  for paths and album ids) with `…`, and paths share a 2 MiB budget over the view (ARCHITECTURE
+  §6). The worst response is then a few MB, and a normal one tens of KB. `State` holds the view
+  behind an `Arc`, so a request does not copy it;
 - issue counts per code come as a list sorted by count, then code (codes are data and are not
   camelCased as keys);
 - `message` texts are passed through as plain text (Liner guarantees one line with control

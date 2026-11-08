@@ -7,6 +7,7 @@
 //! moment of the request, not the moment of the last sample.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use gargoyle_core::api::{
     CheckSummary, CpuSummary, DiskSummary, HostInfo as HostInfoDto, LibraryReport, LibrarySummary,
@@ -92,7 +93,8 @@ struct LibraryState {
 pub struct LoadedReport {
     /// Unix seconds.
     pub generated_at: i64,
-    pub view: LibraryReport,
+    /// Shared with responses: a request clones the pointer, not the view, under the lock.
+    pub view: Arc<LibraryReport>,
 }
 
 impl LoadedReport {
@@ -441,8 +443,8 @@ impl State {
     }
 
     /// The view of the last valid report, if the last read was one.
-    pub fn library_report(&self) -> Option<LibraryReport> {
-        self.loaded_report().map(|r| r.view.clone())
+    pub fn library_report(&self) -> Option<Arc<LibraryReport>> {
+        self.loaded_report().map(|r| Arc::clone(&r.view))
     }
 
     fn loaded_report(&self) -> Option<&LoadedReport> {

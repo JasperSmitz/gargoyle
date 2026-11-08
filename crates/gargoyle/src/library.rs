@@ -14,6 +14,7 @@ use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gargoyle_core::liner::{MAX_REPORT_BYTES, ReadFailure, build_view, parse_report_bytes};
@@ -57,6 +58,11 @@ pub struct Reader {
     logged: Option<String>,
     /// Polls that read the file (as opposed to finding it unchanged or unreadable).
     reads: u64,
+    /// [`POLL_LIMIT`]; shorter in tests.
+    limit: Duration,
+    /// Runs on the blocking pool before each poll, so tests can stall or crash one.
+    #[cfg(test)]
+    before_poll: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Reader {
@@ -67,6 +73,9 @@ impl Reader {
             busy: Busy::default(),
             logged: None,
             reads: 0,
+            limit: POLL_LIMIT,
+            #[cfg(test)]
+            before_poll: None,
         }
     }
 
@@ -80,7 +89,16 @@ impl Reader {
 pub async fn tick(shared: &Shared, reader: &mut Reader) {
     let path = reader.path.clone();
     let known = reader.key;
-    let polled = call(&reader.busy, POLL_LIMIT, move || Ok(poll(&path, known))).await;
+    #[cfg(test)]
+    let before_poll = reader.before_poll.clone();
+    let polled = call(&reader.busy, reader.limit, move || {
+        #[cfg(test)]
+        if let Some(hook) = before_poll {
+            hook();
+        }
+        Ok(poll(&path, known))
+    })
+    .await;
     let poll = match polled {
         Ok(Polled::Unchanged) => LibraryPoll::Unchanged,
         Ok(Polled::Read {
@@ -244,7 +262,7 @@ fn read(path: &Path, meta: &Metadata, opened: &mut bool) -> Result<Box<LoadedRep
     })?;
     Ok(Box::new(LoadedReport {
         generated_at: report.generated_at,
-        view: build_view(&report),
+        view: Arc::new(build_view(&report)),
     }))
 }
 
@@ -632,6 +650,71 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         handle.abort();
+        assert_eq!(albums(&shared), Some(3));
+    }
+
+    /// A poll that does not return within the limit, one that overlaps it and one that panics:
+    /// each drops the report with its own message, and the next poll reads the file again.
+    #[tokio::test]
+    async fn stalled_busy_and_crashed_polls() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.json");
+        replace(&path, &report(3));
+        let shared = shared_for(&path, None);
+        let mut reader = Reader::new(path.clone());
+        reader.limit = Duration::from_millis(50);
+        tick(&shared, &mut reader).await;
+        assert_eq!(albums(&shared), Some(3));
+
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = std::sync::Mutex::new(wait);
+        reader.before_poll = Some(Arc::new(move || {
+            // Blocks until released (or the sender is dropped).
+            let _ = wait.lock().map(|w| w.recv());
+        }));
+        tick(&shared, &mut reader).await;
+        assert_eq!(
+            health(&shared),
+            (
+                Health::Unknown,
+                Some("cannot read report: timed out after 0s".into())
+            )
+        );
+        assert_eq!(albums(&shared), None, "the old report is dropped");
+        assert_eq!(reader.key, None);
+
+        // The stalled poll still runs: the next one is skipped.
+        tick(&shared, &mut reader).await;
+        assert_eq!(
+            health(&shared).1.as_deref(),
+            Some("cannot read report: still running (timed out after 0s)")
+        );
+
+        reader.before_poll = Some(Arc::new(|| panic!("test: reader crash")));
+        release.send(()).unwrap();
+        // Polls are skipped until the stalled one has returned.
+        for _ in 0..300 {
+            tick(&shared, &mut reader).await;
+            if !health(&shared)
+                .1
+                .unwrap_or_default()
+                .contains("still running")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            health(&shared).1.as_deref(),
+            Some("cannot read report: reader crashed")
+        );
+        assert_eq!(reader.key, None);
+
+        // The file did not change, but it is read again.
+        reader.before_poll = None;
+        let reads = reader.reads();
+        tick(&shared, &mut reader).await;
+        assert_eq!(reader.reads(), reads + 1);
         assert_eq!(albums(&shared), Some(3));
     }
 }
