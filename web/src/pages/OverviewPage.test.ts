@@ -89,6 +89,49 @@ describe('OverviewPage', () => {
     expect(host.textContent).toContain('Intel(R) N100 × 4');
   });
 
+  it('renders network and temperature cards from the overview, with temperature health', () => {
+    renderOverview();
+    const net = screen.getByRole('region', { name: 'Network enp1s0' });
+    expect(net.textContent).toContain('118 KiB/s');
+    expect(net.textContent).toContain('8.6 KiB/s');
+    const temps = screen.getByRole('region', { name: 'Temperatures' });
+    expect(temps.textContent).toContain('coretemp/Package id 0');
+    expect(temps.textContent).toContain('48.0 °C');
+    expect(temps.textContent).toContain('Healthy');
+  });
+
+  it('hides the network and temperature cards when those lists are empty', () => {
+    const bare = structuredClone(example);
+    bare.system.net = [];
+    bare.system.temps = [];
+    renderOverview(bare);
+    expect(screen.queryByRole('region', { name: /^Network/ })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Temperatures' })).toBeNull();
+  });
+
+  it('shows the worst sensor health on the temperatures card', () => {
+    const hot = structuredClone(example);
+    hot.system.temps.push({ label: 'nvme/Composite', celsius: 81, health: 'critical' });
+    renderOverview(hot);
+    const temps = screen.getByRole('region', { name: 'Temperatures' });
+    expect(temps.dataset.health).toBe('critical');
+  });
+
+  it('draws last-hour sparklines on the cards it has history for', () => {
+    const history = new Map([
+      ['cpu.usage', [10, null, 20]],
+      ['disk.used:/', [84, 84.1]],
+    ]);
+    render(OverviewPage, { overview: example, serverNow: example.ts, history });
+    expect(
+      within(screen.getByRole('region', { name: 'CPU' }))
+        .getByRole('img')
+        .getAttribute('aria-label'),
+    ).toBe('CPU usage, last hour: 10% to 20%');
+    expect(within(screen.getByRole('region', { name: 'Disk /' })).getByRole('img')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Memory' })).queryByRole('img')).toBeNull();
+  });
+
   it('says so when there is no swap', () => {
     const noSwap = structuredClone(example);
     noSwap.system.memory.swapTotal = 0;

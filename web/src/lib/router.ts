@@ -2,7 +2,10 @@
 // fallback is needed (ARCHITECTURE §6). Pages are added by extending ROUTES and App's page switch,
 // e.g. `{ name: 'service', pattern: '/services/:unit' }`.
 
-const ROUTES = [{ name: 'overview', pattern: '/' }] as const satisfies readonly {
+const ROUTES = [
+  { name: 'overview', pattern: '/' },
+  { name: 'system', pattern: '/system' },
+] as const satisfies readonly {
   name: string;
   pattern: string;
 }[];
@@ -51,6 +54,25 @@ export function parseHash(hash: string): Route {
 /** Builds a link target, encoding each dynamic segment: `href('services', unit)`. */
 export function href(...parts: string[]): string {
   return '#/' + parts.map(encodeURIComponent).join('/');
+}
+
+/** Query parameters after the path, `#/system?range=7d` → `{ range: '7d' }`. */
+export function hashQuery(hash: string): URLSearchParams {
+  const query = hash.indexOf('?');
+  return new URLSearchParams(query === -1 ? '' : hash.slice(query + 1));
+}
+
+/** `href(...)` plus a query string; unset values are left out. */
+export function hrefWithQuery(
+  parts: string[],
+  query: Record<string, string | null | undefined>,
+): string {
+  const params = new URLSearchParams();
+  for (const [name, value] of Object.entries(query)) {
+    if (value !== null && value !== undefined) params.set(name, value);
+  }
+  const encoded = params.toString();
+  return href(...parts) + (encoded ? `?${encoded}` : '');
 }
 
 function segments(path: string): string[] {

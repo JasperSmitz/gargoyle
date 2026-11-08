@@ -15,12 +15,13 @@ function mockApi(offline: boolean): Plugin {
       server.middlewares.use('/api/v1', (req, res, next) => {
         // Node's request type is not visible without @types/node, which only this needs.
         const url = (req as { url?: string }).url ?? '/';
-        const path = url.split('?')[0] ?? '/';
+        const [path = '/', search = ''] = url.split('?');
         server
           .ssrLoadModule('/dev/mock-api.ts')
           .then((mod) => {
             const { status, body } = (mod as typeof import('./dev/mock-api')).respond(
               path,
+              new URLSearchParams(search),
               offline,
             );
             res.statusCode = status;
@@ -49,7 +50,7 @@ export default defineConfig(({ mode }) => {
       outDir: 'dist',
     },
     test: {
-      include: ['src/**/*.test.ts'],
+      include: ['src/**/*.test.ts', 'dev/**/*.test.ts'],
       // Component tests opt into jsdom with a `// @vitest-environment jsdom` comment.
       environment: 'node',
     },
