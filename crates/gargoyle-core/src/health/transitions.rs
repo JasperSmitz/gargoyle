@@ -42,7 +42,9 @@ pub const CONFIRMATIONS: u32 = 2;
 fn confirmations(kind: TargetKind) -> u32 {
     match kind {
         TargetKind::Check => 1,
-        TargetKind::System | TargetKind::Service | TargetKind::Timer => CONFIRMATIONS,
+        TargetKind::System | TargetKind::Service | TargetKind::Timer | TargetKind::Library => {
+            CONFIRMATIONS
+        }
     }
 }
 
@@ -121,6 +123,7 @@ fn key(kind: TargetKind, target: &str) -> (&'static str, String) {
         TargetKind::Service => "service",
         TargetKind::Timer => "timer",
         TargetKind::Check => "check",
+        TargetKind::Library => "library",
     };
     (kind, target.to_owned())
 }

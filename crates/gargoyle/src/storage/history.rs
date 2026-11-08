@@ -262,6 +262,7 @@ pub fn kind_str(kind: TargetKind) -> &'static str {
         TargetKind::Service => "service",
         TargetKind::Timer => "timer",
         TargetKind::Check => "check",
+        TargetKind::Library => "library",
     }
 }
 
@@ -278,6 +279,7 @@ fn parse_kind(r: &Row<'_>, idx: usize) -> rusqlite::Result<TargetKind> {
         "service" => Ok(TargetKind::Service),
         "timer" => Ok(TargetKind::Timer),
         "check" => Ok(TargetKind::Check),
+        "library" => Ok(TargetKind::Library),
         other => Err(invalid(idx, format!("unknown target kind {other:?}"))),
     }
 }

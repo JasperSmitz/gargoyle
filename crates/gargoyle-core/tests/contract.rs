@@ -47,6 +47,8 @@ const CASES: &[Case] = &[
     ("metrics.json", round_trip::<MetricList>),
     ("metrics-query.json", round_trip::<MetricsQuery>),
     ("events.json", round_trip::<EventList>),
+    ("library.json", round_trip::<LibraryResponse>),
+    ("library-unconfigured.json", round_trip::<LibraryResponse>),
 ];
 
 #[test]

@@ -369,6 +369,7 @@ impl State {
             services,
             timers,
             checks,
+            library: None,
             // Events come from storage; the HTTP handler adds them.
             recent_events: Vec::new(),
         }

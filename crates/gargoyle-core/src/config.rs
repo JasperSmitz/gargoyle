@@ -69,6 +69,8 @@ pub struct Config {
     pub timers: Vec<TimerConfig>,
     #[serde(rename = "check")]
     pub checks: Vec<CheckConfig>,
+    /// `None` without a `[library]` section: the feature is off (ADR 0007).
+    pub library: Option<LibraryConfig>,
 }
 
 /// Two 5m rollup buckets: the open one plus the grace before it is rolled up, with margin.
@@ -97,6 +99,9 @@ impl Config {
         self.validate_services(&mut v);
         self.validate_timers(&mut v);
         self.validate_checks(&mut v);
+        if let Some(library) = &self.library {
+            library.validate(&mut v);
+        }
         v.errors
     }
 
@@ -749,6 +754,66 @@ impl fmt::Debug for CheckConfig {
             .field("latency_warning", &self.latency_warning)
             .finish()
     }
+}
+
+/// Shared by config (`warn_on = "error"`) and the API (`"warnOn": "error"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WarnOn {
+    #[default]
+    Error,
+    Warning,
+    Info,
+    /// Only the report's age warns.
+    Never,
+}
+
+/// `[library]`: the Liner report Gargoyle reads (ADR 0007). Gargoyle never runs Liner.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryConfig {
+    /// The report file. Never shown in the API or in messages (§9.4).
+    pub report: PathBuf,
+    #[serde(default = "default_library_name")]
+    pub name: String,
+    /// Warn when the report's `generated_at` is older than this.
+    #[serde(default = "default_library_max_age", with = "humantime_serde")]
+    pub max_age: Duration,
+    /// The lowest issue severity that warns.
+    #[serde(default)]
+    pub warn_on: WarnOn,
+    /// How often the file is checked for changes.
+    #[serde(default = "default_library_interval", with = "humantime_serde")]
+    pub interval: Duration,
+}
+
+impl LibraryConfig {
+    fn validate(&self, v: &mut Validator) {
+        if self.report.as_os_str().is_empty() {
+            v.err("library.report", "must not be empty");
+        }
+        if self.name.trim().is_empty() {
+            v.err("library.name", "must not be empty");
+        } else if self.name.trim() != self.name {
+            v.err("library.name", "must not start or end with whitespace");
+        }
+        if self.max_age < Duration::from_secs(60) {
+            v.err("library.max_age", "must be at least 1m");
+        }
+        v.min_interval("library.interval", self.interval);
+    }
+}
+
+fn default_library_name() -> String {
+    "Music library".to_owned()
+}
+
+fn default_library_max_age() -> Duration {
+    hours(26)
+}
+
+fn default_library_interval() -> Duration {
+    Duration::from_secs(60)
 }
 
 fn default_check_interval() -> Duration {

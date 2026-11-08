@@ -515,3 +515,97 @@ fn ambiguous_userinfo_is_rejected_at_load() {
     .unwrap();
     assert_eq!(ok.checks[0].display_target(), "http://host");
 }
+
+#[test]
+fn library_is_off_by_default() {
+    assert_eq!(parse("").unwrap().library, None);
+}
+
+#[test]
+fn library_defaults() {
+    let c = parse("[library]\nreport = \"/var/lib/liner/report.json\"\n").unwrap();
+    let l = c.library.expect("configured");
+    assert_eq!(l.report, PathBuf::from("/var/lib/liner/report.json"));
+    assert_eq!(l.name, "Music library");
+    assert_eq!(l.max_age, Duration::from_secs(26 * 3600));
+    assert_eq!(l.warn_on, WarnOn::Error);
+    assert_eq!(l.interval, Duration::from_secs(60));
+}
+
+#[test]
+fn library_full_section() {
+    let c = parse(
+        "[library]\nreport = \"report.json\"\nname = \"Music\"\nmax_age = \"2d\"\n\
+         warn_on = \"never\"\ninterval = \"5m\"\n",
+    )
+    .unwrap();
+    let l = c.library.expect("configured");
+    assert_eq!(
+        (l.name.as_str(), l.max_age, l.warn_on, l.interval),
+        (
+            "Music",
+            Duration::from_secs(2 * 86400),
+            WarnOn::Never,
+            Duration::from_secs(300)
+        )
+    );
+    for (text, value) in [
+        ("error", WarnOn::Error),
+        ("warning", WarnOn::Warning),
+        ("info", WarnOn::Info),
+    ] {
+        let c = parse(&format!(
+            "[library]\nreport = \"r.json\"\nwarn_on = \"{text}\"\n"
+        ))
+        .unwrap();
+        assert_eq!(c.library.map(|l| l.warn_on), Some(value));
+    }
+}
+
+#[test]
+fn library_parse_errors() {
+    for text in [
+        // `report` is required in the section.
+        "[library]\nname = \"x\"\n",
+        "[library]\nreport = \"r.json\"\nwarn_on = \"critical\"\n",
+        "[library]\nreport = \"r.json\"\nnope = 1\n",
+    ] {
+        assert!(matches!(parse(text), Err(ConfigError::Parse(_))), "{text}");
+    }
+}
+
+#[test]
+fn library_validation() {
+    let rows: &[(&str, &[&str])] = &[
+        ("report = \"\"", &["library.report"]),
+        ("report = \"r.json\"\nname = \"\"", &["library.name"]),
+        ("report = \"r.json\"\nname = \"  \"", &["library.name"]),
+        ("report = \"r.json\"\nname = \" Music\"", &["library.name"]),
+        (
+            "report = \"r.json\"\nmax_age = \"59s\"",
+            &["library.max_age"],
+        ),
+        (
+            "report = \"r.json\"\ninterval = \"0s\"",
+            &["library.interval"],
+        ),
+        (
+            "report = \"\"\nname = \"x \"\nmax_age = \"1s\"\ninterval = \"500ms\"",
+            &[
+                "library.report",
+                "library.name",
+                "library.max_age",
+                "library.interval",
+            ],
+        ),
+    ];
+    for (body, expected) in rows {
+        assert_eq!(
+            error_paths(&format!("[library]\n{body}\n")),
+            *expected,
+            "{body}"
+        );
+    }
+    // The boundaries are valid.
+    parse("[library]\nreport = \"r.json\"\nmax_age = \"1m\"\ninterval = \"1s\"\n").unwrap();
+}

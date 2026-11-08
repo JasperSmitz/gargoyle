@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::config::CheckKind;
+pub use crate::config::{CheckKind, WarnOn};
 use crate::health::Health;
 
 /// `GET /api/v1/health`. Not to be confused with the [`Health`] state enum.
@@ -62,6 +62,8 @@ pub struct Overview {
     pub services: Vec<ServiceSummary>,
     pub timers: Vec<TimerSummary>,
     pub checks: Vec<CheckSummary>,
+    /// `None` without `[library]`.
+    pub library: Option<LibrarySummary>,
     /// At most 10, newest first.
     pub recent_events: Vec<Event>,
 }
@@ -264,6 +266,7 @@ pub enum TargetKind {
     Service,
     Timer,
     Check,
+    Library,
 }
 
 /// `GET /api/v1/services`.
@@ -377,4 +380,151 @@ pub struct EventList {
     pub host: String,
     /// Newest first.
     pub events: Vec<Event>,
+}
+
+/// `GET /api/v1/library` (ADR 0007).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryResponse {
+    pub host: String,
+    /// Whether `[library]` is configured; `library` and `report` are `None` when not.
+    pub configured: bool,
+    pub library: Option<LibrarySummary>,
+    /// The view of the last valid report; `None` before the first read or after a failed one.
+    pub report: Option<LibraryReport>,
+}
+
+/// The library target: `overview.library` and `library` in `GET /api/v1/library`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySummary {
+    pub name: String,
+    pub health: Health,
+    pub message: Option<String>,
+    /// When the file was last polled.
+    pub checked_at: Option<i64>,
+    /// The report's `generated_at`. This and the fields below are `None` without a valid report.
+    pub generated_at: Option<i64>,
+    /// Seconds since `generated_at` at response time, clamped at 0.
+    pub age: Option<i64>,
+    /// Seconds.
+    pub max_age: u64,
+    pub warn_on: WarnOn,
+    pub issue_counts: Option<SeverityCounts>,
+    pub unreadable_files: Option<u64>,
+    pub albums: Option<u64>,
+}
+
+/// Liner issue severity. The variant order is the severity order (`info < warning < error`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueScope {
+    File,
+    Album,
+    Library,
+}
+
+/// Issue counts per severity, as in Liner's `summary.issues_by_severity`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeverityCounts {
+    pub error: u64,
+    pub warning: u64,
+    pub info: u64,
+}
+
+/// The API view of one Liner report: grouped, ordered and capped (ARCHITECTURE §6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryReport {
+    pub schema_version: String,
+    pub tool: LinerTool,
+    /// The report's `--min-severity` filter.
+    pub min_severity: Severity,
+    pub summary: ReportSummary,
+    /// Albums with at least one kept issue, worst first, then by id.
+    pub albums: Vec<LibraryAlbum>,
+    /// Kept issues without an album.
+    pub library_issues: Vec<LibraryIssue>,
+    /// The first kept unreadable files.
+    pub errors: Vec<LibraryFileError>,
+    /// Issues in the report.
+    pub issues_total: u64,
+    pub issues_truncated: bool,
+    /// Unreadable files in the report.
+    pub errors_total: u64,
+    pub errors_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinerTool {
+    pub name: String,
+    pub version: String,
+}
+
+/// Describes the whole report, whatever the caps dropped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportSummary {
+    pub files_scanned: u64,
+    pub audio_files: u64,
+    pub unreadable_files: u64,
+    pub albums: u64,
+    pub issue_counts: SeverityCounts,
+    /// Issues removed by the report's `--min-severity`.
+    pub issues_hidden: u64,
+    /// Sorted by count (highest first), then code.
+    pub by_code: Vec<CodeCount>,
+}
+
+/// Issue codes are data (an open set), so they are values here, not keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCount {
+    pub code: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryAlbum {
+    /// Root-relative directory.
+    pub id: String,
+    pub title: Option<String>,
+    pub album_artist: Option<String>,
+    pub disc_count: u32,
+    pub track_count: u32,
+    pub issues: Vec<LibraryIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryIssue {
+    /// Open set: unknown codes are shown as they are.
+    pub code: String,
+    pub severity: Severity,
+    pub scope: IssueScope,
+    /// Plain text, one line; never to be rendered as HTML.
+    pub message: String,
+    /// The first paths, root-relative.
+    pub paths: Vec<String>,
+    pub paths_total: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFileError {
+    pub path: String,
+    /// Open set.
+    pub kind: String,
+    pub message: String,
 }
