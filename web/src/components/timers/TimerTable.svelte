@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { TimerSummary } from '../../lib/api/types';
-  import { formatCountdown, formatRelativeTime, formatTimestamp } from '../../lib/format';
+  import { formatCountdown, formatRelativeTime } from '../../lib/format';
   import { needsAttention, sortBySeverity } from '../../lib/health';
   import { href } from '../../lib/router';
   import { isRunning, runOutcome } from '../../lib/timers';
   import DataTable from '../DataTable.svelte';
   import HealthBadge from '../HealthBadge.svelte';
+  import Time from '../Time.svelte';
   import RunOutcome from './RunOutcome.svelte';
 
   // The overview's timers; layout and row conventions come from DataTable.
@@ -38,14 +39,20 @@
           <span class="running">Running now</span>
           <!-- lastRun may still be the previous, finished run if the flag got there first. -->
           {#if timer.lastRun && runOutcome(timer.lastRun) === 'running'}
-            <span class="sub" title={formatTimestamp(timer.lastRun.startedAt)}>
-              started {formatRelativeTime(timer.lastRun.startedAt, serverNow)}
-            </span>
+            <span class="sub"
+              >started <Time
+                ts={timer.lastRun.startedAt}
+                text={formatRelativeTime(timer.lastRun.startedAt, serverNow)}
+              /></span
+            >
           {/if}
         {:else if timer.lastRun}
-          <span title={formatTimestamp(timer.lastRun.startedAt)}>
-            {formatRelativeTime(timer.lastRun.startedAt, serverNow)}
-          </span>
+          <span
+            ><Time
+              ts={timer.lastRun.startedAt}
+              text={formatRelativeTime(timer.lastRun.startedAt, serverNow)}
+            /></span
+          >
           <span class="sub"><RunOutcome run={timer.lastRun} /></span>
         {:else}
           <span class="never">Never run</span>
@@ -53,9 +60,7 @@
       </td>
       <td data-label="Next run">
         {#if timer.nextRun !== null}
-          <span title={formatTimestamp(timer.nextRun)}>
-            {formatCountdown(timer.nextRun, serverNow)}
-          </span>
+          <span><Time ts={timer.nextRun} text={formatCountdown(timer.nextRun, serverNow)} /></span>
         {:else}
           <span class="never">Not scheduled</span>
         {/if}

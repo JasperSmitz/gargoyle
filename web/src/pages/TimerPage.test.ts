@@ -128,7 +128,7 @@ describe('TimerPage', () => {
       visibility: visible,
       serverNow: NOW,
     });
-    expect(screen.getByRole('status').textContent).toContain('Loading timer');
+    expect(screen.getByRole('status', { name: 'Loading timer' })).toBeTruthy();
   });
 
   it('shows not found for an unknown unit', async () => {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ServiceSummary } from '../../lib/api/types';
   import { formatBytes, formatDuration, formatTimestamp } from '../../lib/format';
+  import Time from '../Time.svelte';
   import { sortBySeverity } from '../../lib/health';
   import { href } from '../../lib/router';
   import CardList from '../CardList.svelte';
@@ -26,9 +27,11 @@
         {#snippet meta()}
           <span>{service.activeState} ({service.subState})</span>
           {#if service.since !== null}
-            <span title="Since {formatTimestamp(service.since)}">
-              for {formatDuration(serverNow - service.since)}
-            </span>
+            <Time
+              ts={service.since}
+              text="for {formatDuration(serverNow - service.since)}"
+              title="Since {formatTimestamp(service.since)}"
+            />
           {/if}
           {#if service.memory !== null}<span>{formatBytes(service.memory)}</span>{/if}
           {#if service.restarts > 0}

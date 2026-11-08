@@ -14,6 +14,7 @@
     isTimestamp,
   } from '../../lib/format';
   import StatCard from '../StatCard.svelte';
+  import Time from '../Time.svelte';
   import UsageBar from '../UsageBar.svelte';
 
   let {
@@ -152,7 +153,11 @@
   <StatCard title="Host" wide>
     <p class="value">
       <span class="up-label">up</span>
-      <span title="Booted {formatTimestamp(hostInfo.bootTime)}">{formatDuration(uptime)}</span>
+      <Time
+        ts={hostInfo.bootTime}
+        text={formatDuration(uptime)}
+        title="Booted {formatTimestamp(hostInfo.bootTime)}"
+      />
     </p>
     <dl class="facts">
       <div>

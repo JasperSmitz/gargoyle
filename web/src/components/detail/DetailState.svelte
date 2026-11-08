@@ -1,33 +1,76 @@
+<script lang="ts" module>
+  import type { Health } from '../../lib/api/types';
+
+  /** What DetailHeader shows once the detail has loaded. */
+  export interface DetailSummary {
+    kind: string;
+    name: string;
+    unit: string;
+    health: Health;
+    message: string | null;
+  }
+</script>
+
 <script lang="ts" generics="T">
   import type { Snippet } from 'svelte';
   import { ApiRequestError } from '../../lib/api/client';
   import { describeFeedError } from '../../lib/overview-feed.svelte';
   import { href } from '../../lib/router';
   import EmptyState from '../EmptyState.svelte';
+  import DetailSkeleton from '../skeleton/DetailSkeleton.svelte';
+  import DetailHeader from './DetailHeader.svelte';
 
-  // Loading, not-found and error states for a detail page's polled data. Once data has arrived it
-  // stays on screen, with a note if a later refresh fails.
+  // Header plus loading, not-found and error states for a detail page's polled data. The header
+  // is rendered once, outside the state switch, so its h1 (the route focus target) survives the
+  // first response. Once data has arrived it stays on screen, with a note if a refresh fails.
   let {
     data,
     error,
     noun,
+    kind,
     name,
+    charts = 0,
+    runs = false,
     onretry,
+    summary,
+    facts: factsFor,
     children,
   }: {
     data: T | null;
     error: unknown;
     /** What the page shows, e.g. "timer". */
     noun: string;
-    /** The requested unit, for the not-found message. */
+    /** Header label until the detail has loaded, e.g. "Timer". */
+    kind: string;
+    /** The requested unit: the heading until the detail names it, and the not-found message. */
     name: string;
+    /** Chart panels the loaded page shows, so the skeleton reserves their space. */
+    charts?: number;
+    /** The loaded page shows a run history list. */
+    runs?: boolean;
     onretry: () => void;
+    summary: (data: T) => DetailSummary;
+    /** The header's facts (`<div><dt/><dd/></div>` groups). */
+    facts: Snippet<[T]>;
+    /** Everything below the header. */
     children: Snippet<[T]>;
   } = $props();
 
   const notFound = $derived(error instanceof ApiRequestError && error.status === 404);
   const failure = $derived(error === null ? null : describeFeedError(error));
+  const shown = $derived(data === null ? null : summary(data));
 </script>
+
+<DetailHeader
+  kind={shown?.kind ?? kind}
+  name={shown?.name ?? name}
+  unit={shown?.unit ?? name}
+  health={shown?.health ?? null}
+  message={shown?.message ?? null}
+  loading={data === null && error === null ? `Loading ${noun}` : null}
+>
+  {#snippet facts()}{#if data !== null}{@render factsFor(data)}{/if}{/snippet}
+</DetailHeader>
 
 {#if notFound}
   <EmptyState title="No {noun} called {name}">
@@ -47,17 +90,13 @@
     <button type="button" class="retry" onclick={onretry}>Try again</button>
   </EmptyState>
 {:else}
-  <p class="loading" role="status">Loading {noun}…</p>
+  <DetailSkeleton {noun} {charts} {runs} />
 {/if}
 
 <style>
   .note {
     font-size: var(--text-sm);
     color: var(--health-warning-fg);
-  }
-
-  .loading {
-    color: var(--color-text-faint);
   }
 
   .retry {

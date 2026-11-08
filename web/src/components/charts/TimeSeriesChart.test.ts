@@ -65,7 +65,7 @@ describe('TimeSeriesChart', () => {
 
   it('shows a loading state before the first response', () => {
     render(TimeSeriesChart, props({ data: null, loading: true }));
-    expect(screen.getByRole('status').textContent).toContain('Loading');
+    expect(screen.getByRole('status', { name: /^Loading/ })).toBeTruthy();
     expect(plots).toHaveLength(0);
   });
 

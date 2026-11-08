@@ -22,13 +22,27 @@ function countLabel(health: Exclude<Health, 'healthy'>, count: number): string {
 
 /**
  * `Gargoyle — host` when healthy, `⚠ 2 warnings · Gargoyle — host` otherwise, `Offline · …` when
- * the last poll failed (the shown health may be out of date), and plain `Gargoyle` before the
- * first response.
+ * the last poll failed (the shown health may be out of date) or `Sign-in needed · …` on a 401, and plain `Gargoyle` before the
+ * first response. A page other than the overview names itself before the app:
+ * `⚠ 2 warnings · System · Gargoyle — host`, so tabs and history entries are told apart.
  */
-export function documentTitle(overview: Overview | null, offline: boolean): string {
-  if (overview === null) return offline ? `Offline · ${APP_NAME}` : APP_NAME;
-  const base = `${APP_NAME} — ${overview.host}`;
-  if (offline) return `Offline · ${base}`;
+/** Why the shown health may be out of date: the server is unreachable, or it refuses us (401). */
+export type FeedProblem = 'offline' | 'unauthorized';
+
+const PROBLEM_PREFIX: Record<FeedProblem, string> = {
+  offline: 'Offline',
+  unauthorized: 'Sign-in needed',
+};
+
+export function documentTitle(
+  overview: Overview | null,
+  problem: FeedProblem | null,
+  page: string | null = null,
+): string {
+  const app = overview === null ? APP_NAME : `${APP_NAME} — ${overview.host}`;
+  const base = page === null ? app : `${page} · ${app}`;
+  if (problem !== null) return `${PROBLEM_PREFIX[problem]} · ${base}`;
+  if (overview === null) return base;
   const health = overview.health;
   if (health === 'healthy') return base;
   // `counts` can lag the aggregate in theory (the system is one target); never print "0 ...".

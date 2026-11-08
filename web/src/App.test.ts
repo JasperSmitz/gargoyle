@@ -93,14 +93,131 @@ describe('App', () => {
     expect(client.overview.mock.calls[0]?.[0]?.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it('shows the banner without a skeleton when the first load fails', async () => {
+  it('shows a meaningful shell, not a skeleton, when the first load fails', async () => {
     const client = clientWith(async () => {
-      throw new ApiRequestError('internal', 'boom', 500);
+      throw new ApiRequestError('network', 'Failed to fetch', 0);
     });
     render(App, { client, visibility: visible });
     await vi.advanceTimersByTimeAsync(0);
-    expect(screen.getByRole('alert').textContent).toContain('Server error');
+    expect(screen.getByRole('alert').textContent).toContain('Server unreachable');
     expect(screen.queryByRole('status', { name: 'Loading overview' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Gargoyle overview' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'Waiting for the server' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry now' })).toBeTruthy();
+    expect(document.title).toBe('Offline · Gargoyle');
+  });
+
+  it('asks for a reload when any request answers 401', async () => {
+    location.hash = '#/timers/music-sync.timer';
+    const client = clientWith(async () => fixtures['overview.json']);
+    client.timer.mockRejectedValue(new ApiRequestError('unauthorized', 'auth required', 401));
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getAllByRole('alert')[0]?.textContent).toContain(
+      'Authentication required — reload to sign in',
+    );
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry now' })).toBeNull();
+    expect(document.title).toBe('Sign-in needed · music-sync.timer · Gargoyle — debian-box');
+  });
+
+  it('shows the authentication message instead of the offline banner on a first-load 401', async () => {
+    const client = clientWith(async () => {
+      throw new ApiRequestError('unauthorized', 'auth required', 401);
+    });
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByRole('alert').textContent).toContain('Authentication required');
+    expect(screen.queryByText('Server error')).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Sign-in needed' })).toBeTruthy();
+    expect(document.title).toBe('Sign-in needed · Gargoyle');
+  });
+
+  it('moves focus to the new page heading on navigation, and keeps it on query changes', async () => {
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    const navigate = async (to: string) => {
+      location.hash = to;
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+      await vi.advanceTimersByTimeAsync(0);
+    };
+
+    await navigate('#/system');
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: 'System' }));
+    expect(document.title).toContain('System · Gargoyle');
+
+    const range = screen.getByRole('link', { name: '7d' });
+    range.focus();
+    await navigate('#/system?range=7d');
+    expect(document.activeElement).toBe(range);
+  });
+
+  it.each([
+    ['service', '#/services/minecraft.service', 'minecraft.service', 'Minecraft'],
+    ['timer', '#/timers/music-sync.timer', 'music-sync.timer', 'Music sync'],
+    ['check', '#/checks/Game%20port', 'Game port', 'Game port'],
+  ] as const)(
+    'keeps route focus on the %s heading when its detail arrives',
+    async (kind, to, loadingName, loadedName) => {
+      const client = clientWith(async () => fixtures['overview.json']);
+      let resolve: () => void = () => {};
+      const pending = new Promise<void>((r) => (resolve = r));
+      const fixture = {
+        service: 'service-detail.json',
+        timer: 'timer-detail.json',
+        check: 'check-detail.json',
+      } as const;
+      client[kind].mockImplementation((async () => {
+        await pending;
+        return fixtures[fixture[kind]];
+      }) as never);
+      render(App, { client, visibility: visible });
+      await vi.advanceTimersByTimeAsync(0);
+
+      location.hash = to;
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+      await vi.advanceTimersByTimeAsync(0);
+      const heading = screen.getByRole('heading', { level: 1, name: loadingName });
+      expect(document.activeElement).toBe(heading);
+
+      resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByRole('heading', { level: 1, name: loadedName })).toBe(heading);
+      expect(document.activeElement).toBe(heading);
+    },
+  );
+
+  it('keeps a heading on a detail page that could not load', async () => {
+    location.hash = '#/services/minecraft.service';
+    const client = clientWith(async () => fixtures['overview.json']);
+    client.service.mockRejectedValue(new ApiRequestError('network', 'Failed to fetch', 0));
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByRole('heading', { level: 1, name: 'minecraft.service' })).toBeTruthy();
+    expect(screen.getByText('Could not load this service')).toBeTruthy();
+  });
+
+  it('restores focus to an events filter that the page re-created', async () => {
+    location.hash = '#/events';
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    screen.getByRole('combobox', { name: 'Kind' }).focus();
+    location.hash = '#/events?kind=service';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    await vi.advanceTimersByTimeAsync(0);
+    const kind = screen.getByRole('combobox', { name: 'Kind' }) as HTMLSelectElement;
+    expect(document.activeElement).toBe(kind);
+  });
+
+  it('has a skip link that focuses the page heading without changing the route', async () => {
+    const client = clientWith(async () => fixtures['overview.json']);
+    render(App, { client, visibility: visible });
+    await vi.advanceTimersByTimeAsync(0);
+    screen.getByRole('link', { name: 'Skip to content' }).click();
+    expect(location.hash).toBe('');
+    expect(document.activeElement?.tagName).toBe('H1');
   });
 
   it('loads last-hour sparklines on the overview only', async () => {
@@ -173,22 +290,22 @@ describe('App', () => {
     const icon = () => document.querySelector('link[rel="icon"]')?.getAttribute('href');
     const client = clientWith(async () => fixtures['overview.json']);
     render(App, { client, visibility: visible });
-    expect(document.title).toBe('Gargoyle');
+    expect(document.title).toBe('System · Gargoyle');
     await vi.advanceTimersByTimeAsync(0);
     // The example overview is critical with two critical targets.
-    expect(document.title).toBe('✖ 2 critical · Gargoyle — debian-box');
+    expect(document.title).toBe('✖ 2 critical · System · Gargoyle — debian-box');
     expect(icon()).toBe(faviconHref('critical'));
 
     const healthy = structuredClone(fixtures['overview.json']);
     healthy.health = 'healthy';
     client.overview.mockResolvedValue(healthy);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(document.title).toBe('Gargoyle — debian-box');
+    expect(document.title).toBe('System · Gargoyle — debian-box');
     expect(icon()).toBe(faviconHref('healthy'));
 
     client.overview.mockRejectedValue(new ApiRequestError('network', 'Failed to fetch', 0));
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(document.title).toBe('Offline · Gargoyle — debian-box');
+    expect(document.title).toBe('Offline · System · Gargoyle — debian-box');
     expect(icon()).toBe(faviconHref('unknown'));
   });
 

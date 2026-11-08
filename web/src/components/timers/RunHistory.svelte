@@ -2,6 +2,7 @@
   import type { TimerRun } from '../../lib/api/types';
   import { formatDuration, formatRelativeTime, formatTimestamp } from '../../lib/format';
   import { durationFractions, runDuration, runOutcome } from '../../lib/timers';
+  import Time from '../Time.svelte';
   import RunOutcome from './RunOutcome.svelte';
 
   // Newest first. Each run's duration is a bar scaled to the longest run shown, so slow or
@@ -31,10 +32,12 @@
     {@const fraction = fractions[i] ?? null}
     <li class="run" title={tooltip(run)}>
       <span class="when">
-        <time datetime={new Date(run.startedAt * 1000).toISOString()}>
-          {formatRelativeTime(run.startedAt, serverNow)}
-        </time>
-        <span class="absolute">{formatTimestamp(run.startedAt)}</span>
+        <Time
+          ts={run.startedAt}
+          text={formatRelativeTime(run.startedAt, serverNow)}
+          title={tooltip(run)}
+        />
+        <span class="absolute"><Time ts={run.startedAt} /></span>
       </span>
       <span class="result">
         <RunOutcome {run} />

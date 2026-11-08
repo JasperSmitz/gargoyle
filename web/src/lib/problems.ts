@@ -3,6 +3,7 @@
 // their line is built from the current value instead.
 
 import type { Health, Overview, TargetKind } from './api/types';
+import { formatValue } from './charts/units';
 import { formatLoad, formatPercent, isTimestamp } from './format';
 import { HEALTH_PRESENTATION, needsAttention, sortBySeverity } from './health';
 import { targetHref } from './router';
@@ -56,7 +57,13 @@ export function collectProblems(overview: Overview): Problem[] {
       );
     }
     for (const temp of system.temps) {
-      add('system', `temp:${temp.label}`, temp.label, temp.health, `${temp.celsius.toFixed(0)} °C`);
+      add(
+        'system',
+        `temp:${temp.label}`,
+        temp.label,
+        temp.health,
+        formatValue('celsius', temp.celsius),
+      );
     }
     // System health can be worse than any part, e.g. `unknown` when the collector is stale.
     if (needsAttention(system.health) && !problems.some((p) => p.health === system.health)) {

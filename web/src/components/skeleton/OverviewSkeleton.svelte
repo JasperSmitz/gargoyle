@@ -1,15 +1,17 @@
 <script lang="ts">
+  import SkeletonBlock from './SkeletonBlock.svelte';
+
   // First-load placeholder with the overview's shape, so content does not jump when it arrives.
 </script>
 
 <div class="skeleton" role="status" aria-label="Loading overview">
-  <div class="block summary"></div>
+  <SkeletonBlock height="6.5rem" />
   <div class="grid">
     {#each { length: 6 }, i (i)}
-      <div class="block card"></div>
+      <SkeletonBlock height="8.5rem" />
     {/each}
   </div>
-  <div class="block list"></div>
+  <SkeletonBlock height="14rem" />
 </div>
 
 <style>
@@ -22,29 +24,5 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
     gap: var(--space-3);
-  }
-
-  .block {
-    border-radius: var(--radius-lg);
-    background: var(--color-surface-sunken);
-    animation: pulse 1.4s ease-in-out infinite;
-  }
-
-  .summary {
-    height: 6.5rem;
-  }
-
-  .card {
-    height: 8.5rem;
-  }
-
-  .list {
-    height: 14rem;
-  }
-
-  @keyframes pulse {
-    50% {
-      opacity: 0.55;
-    }
   }
 </style>

@@ -30,29 +30,43 @@ export function serviceChartGroups(unit: string): ChartGroup[] {
 
 /**
  * A series is created by its first sample, and the backend answers an exact unknown key with
- * 400 `unknown_series` (§5): a service that never reported memory has no memory series yet. For these charts that
- * means "no data", not a failure.
+ * 400 `unknown_series` (§5): a service that never reported memory, or a check that never
+ * answered, has no series yet. For these charts that means "no data", not a failure. The series
+ * list is consulted first so no failing request is made (the browser would log it as an error);
+ * keys are remembered once listed. The 400 is still treated as empty in case a series disappears
+ * between the two requests.
  */
 export function treatUnknownKeyAsEmpty(
-  client: Pick<ApiClient, 'metricsQuery'>,
+  client: Pick<ApiClient, 'metricsQuery' | 'metrics'>,
 ): Pick<ApiClient, 'metricsQuery'> {
+  const listed = new Set<string>();
   return {
     metricsQuery: async (query, req) => {
+      const exact = query.keys.filter((key) => !key.includes('*'));
+      if (exact.some((key) => !listed.has(key))) {
+        const { series } = await client.metrics(req);
+        for (const info of series) listed.add(info.key);
+        const allUnknown = exact.length === query.keys.length && exact.every((k) => !listed.has(k));
+        if (allUnknown) return emptyResult(query);
+      }
       try {
         return await client.metricsQuery(query, req);
       } catch (error) {
         if (!isUnknownKey(error)) throw error;
-        const empty: MetricsQuery = {
-          host: '',
-          from: query.from ?? 0,
-          to: query.to ?? 0,
-          step: 0,
-          resolution: 'raw',
-          series: [],
-        };
-        return empty;
+        return emptyResult(query);
       }
     },
+  };
+}
+
+function emptyResult(query: { from?: number; to?: number }): MetricsQuery {
+  return {
+    host: '',
+    from: query.from ?? 0,
+    to: query.to ?? 0,
+    step: 0,
+    resolution: 'raw',
+    series: [],
   };
 }
 

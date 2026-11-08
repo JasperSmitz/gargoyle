@@ -7,7 +7,7 @@ describe('describeFeedError', () => {
   it.each([
     [new ApiRequestError('network', 'Failed to fetch', 0), 'Server unreachable'],
     [new PollTimeoutError(10_000), 'Server not responding'],
-    [new ApiRequestError('unauthorized', 'auth required', 401), 'Not signed in'],
+    [new ApiRequestError('unauthorized', 'auth required', 401), 'Authentication required'],
     [new ApiRequestError('internal', 'boom', 500), 'Server error'],
     [new Error('weird'), 'Update failed'],
   ])('%s -> %s', (error, title) => {

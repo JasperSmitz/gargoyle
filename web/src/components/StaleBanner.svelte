@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatRelativeTime } from '../lib/format';
+  import Time from './Time.svelte';
   import HealthIcon from './HealthIcon.svelte';
 
   // Shown when polling fails. The page below keeps the last good data, so say how old it is.
@@ -28,7 +29,9 @@
       <p class="detail">{detail}. Retrying automatically.</p>
     </div>
     {#if receivedAt !== null}
-      <p class="detail age">Showing data from {formatRelativeTime(receivedAt, now)}.</p>
+      <p class="detail age">
+        Showing data from <Time ts={receivedAt} text={formatRelativeTime(receivedAt, now)} />.
+      </p>
     {/if}
   </div>
   <button class="retry" type="button" onclick={onretry}>Retry now</button>

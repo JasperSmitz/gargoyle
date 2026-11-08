@@ -4,8 +4,11 @@
   import { breakPoints } from '../../lib/format';
   import { needsAttention } from '../../lib/health';
   import HealthBadge from '../HealthBadge.svelte';
+  import SkeletonBlock from '../skeleton/SkeletonBlock.svelte';
 
-  // Top of a detail page: name, unit, health with its reason, then key facts as a <dl>.
+  // Top of a detail page: name, unit, health with its reason, then key facts as a <dl>. It stays
+  // mounted from the first render (name from the URL) through loading, errors and data, so the
+  // h1 that route focus lands on is never replaced under the user.
   let {
     kind,
     name,
@@ -13,19 +16,23 @@
     health,
     message,
     facts,
+    loading = null,
   }: {
     /** "Timer", "Service". */
     kind: string;
     name: string;
     unit: string;
-    health: Health;
+    /** Null until the detail has loaded (or when it could not be). */
+    health: Health | null;
     message: string | null;
-    /** `<div><dt/><dd/></div>` groups. */
-    facts: Snippet;
+    /** `<div><dt/><dd/></div>` groups; only rendered with a health. */
+    facts?: Snippet;
+    /** Status label while the first response is pending, e.g. "Loading timer". */
+    loading?: string | null;
   } = $props();
 </script>
 
-<section class="header health-{health}" aria-label="{kind} summary">
+<section class="header health-{health ?? 'none'}" aria-label="{kind} summary">
   <div class="title">
     <div class="names">
       <span class="kind">{kind}</span>
@@ -37,10 +44,21 @@
         >
       {/if}
     </div>
-    <HealthBadge {health} />
+    {#if health}<HealthBadge {health} />{/if}
   </div>
-  {#if message && needsAttention(health)}<p class="message">{message}</p>{/if}
-  <dl class="facts">{@render facts()}</dl>
+  {#if health && message && needsAttention(health)}<p class="message">{message}</p>{/if}
+  {#if loading}
+    <div class="facts placeholder" role="status" aria-label={loading}>
+      {#each { length: 4 }, i (i)}
+        <div>
+          <SkeletonBlock height="0.75rem" width="4rem" radius="var(--radius-sm)" />
+          <SkeletonBlock height="1.25rem" width="7rem" radius="var(--radius-sm)" />
+        </div>
+      {/each}
+    </div>
+  {:else if health && facts}
+    <dl class="facts">{@render facts()}</dl>
+  {/if}
 </section>
 
 <style>
@@ -55,6 +73,9 @@
     box-shadow: var(--shadow-sm);
   }
 
+  .health-none {
+    border-left-color: var(--color-border-strong);
+  }
   .health-healthy {
     border-left-color: var(--health-healthy-fg);
   }
@@ -124,6 +145,11 @@
     margin: 0;
     padding-top: var(--space-3);
     border-top: 1px solid var(--color-border);
+  }
+
+  .placeholder > div {
+    display: grid;
+    gap: var(--space-1);
   }
 
   .facts :global(dt) {

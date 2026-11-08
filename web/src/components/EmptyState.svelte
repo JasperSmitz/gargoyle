@@ -1,11 +1,20 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  let { title, children }: { title: string; children?: Snippet } = $props();
+  let {
+    title,
+    heading = false,
+    children,
+  }: {
+    title: string;
+    /** The page's own heading (a page that is nothing but this state, e.g. not found). */
+    heading?: boolean;
+    children?: Snippet;
+  } = $props();
 </script>
 
 <div class="empty">
-  <p class="title">{title}</p>
+  <svelte:element this={heading ? 'h1' : 'p'} class="title">{title}</svelte:element>
   {#if children}<p class="hint">{@render children()}</p>{/if}
 </div>
 
@@ -20,6 +29,7 @@
   }
 
   .title {
+    font-size: var(--text-md);
     font-weight: var(--weight-medium);
   }
 
