@@ -1,0 +1,120 @@
+/*
+ * Design tokens: the only place colors, spacing, radii and type are defined.
+ * Palette: warm stone greys with a single verdigris (weathered copper) accent.
+ * Health colors are never the only signal; components pair them with text or an icon (M4.4).
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces and text (light) */
+  --color-bg: #f3f1ed;
+  --color-surface: #fbfaf8;
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #e9e6e0;
+  --color-border: #dcd7cf;
+  --color-border-strong: #c3bcb1;
+  --color-text: #2a2723;
+  --color-text-muted: #6a645b;
+  /* AA (≥4.5:1) on bg, surface and surface-raised; use text-muted on surface-sunken. */
+  --color-text-faint: #736d63;
+
+  /* Accent: verdigris */
+  --color-accent: #2f7568;
+  --color-accent-hover: #255f54;
+  --color-accent-subtle: #dcebe7;
+  --color-on-accent: #ffffff;
+  --color-focus-ring: #2f7568;
+
+  /* Health: `fg` for text/icons on surfaces, `bg` for badge fills, `border` for outlines */
+  --health-healthy-fg: #2f6b42;
+  --health-healthy-bg: #e1eedf;
+  --health-healthy-border: #a9cba8;
+  --health-warning-fg: #8a5a0b;
+  --health-warning-bg: #f6ead2;
+  --health-warning-border: #e0c48c;
+  --health-critical-fg: #a3302a;
+  --health-critical-bg: #f7e0dc;
+  --health-critical-border: #e2aaa2;
+  --health-unknown-fg: #645e56;
+  --health-unknown-bg: #ebe8e3;
+  --health-unknown-border: #cdc7be;
+
+  --shadow-sm: 0 1px 2px rgb(42 39 35 / 0.06), 0 1px 1px rgb(42 39 35 / 0.04);
+  --shadow-md: 0 4px 12px rgb(42 39 35 / 0.08), 0 1px 3px rgb(42 39 35 / 0.06);
+
+  /* Spacing (4px scale) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* Typography */
+  --font-sans:
+    system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --tracking-wide: 0.04em;
+
+  /* Layout and motion */
+  --content-max-width: 72rem;
+  --header-height: 3.5rem;
+  --duration-fast: 120ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #191816;
+    --color-surface: #211f1c;
+    --color-surface-raised: #2a2824;
+    --color-surface-sunken: #151412;
+    --color-border: #37342f;
+    --color-border-strong: #4a463f;
+    --color-text: #ebe7e0;
+    --color-text-muted: #a8a197;
+    --color-text-faint: #968f84;
+
+    --color-accent: #6db5a6;
+    --color-accent-hover: #8cc8bb;
+    --color-accent-subtle: #1f3632;
+    --color-on-accent: #10201d;
+    --color-focus-ring: #6db5a6;
+
+    --health-healthy-fg: #7cc28f;
+    --health-healthy-bg: #1d2e22;
+    --health-healthy-border: #345a3e;
+    --health-warning-fg: #e3ad55;
+    --health-warning-bg: #33280f;
+    --health-warning-border: #634c1f;
+    --health-critical-fg: #ef8173;
+    --health-critical-bg: #3a1d19;
+    --health-critical-border: #6d3029;
+    --health-unknown-fg: #aaa398;
+    --health-unknown-bg: #2a2824;
+    --health-unknown-border: #47433c;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-md: 0 4px 12px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.3);
+  }
+}
