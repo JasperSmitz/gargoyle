@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PLACEHOLDER,
   formatBytes,
+  formatCountdown,
   formatDuration,
   formatLoad,
   formatPercent,
@@ -114,5 +115,45 @@ describe('formatTimestamp', () => {
     expect(formatTimestamp(1_794_200_000)).toMatch(/2026/);
     expect(formatTimestamp(null)).toBe(PLACEHOLDER);
     expect(formatTimestamp(0)).toBe(PLACEHOLDER);
+  });
+});
+
+describe('formatCountdown', () => {
+  const now = 1_794_200_000;
+  it.each([
+    [now + 75_600, 'in 21h'],
+    [now + 3 * 3600 + 12 * 60 + 5, 'in 3h 12m'],
+    [now + 42, 'in 42s'],
+    [now + 1, 'in 1s'],
+    [now + 0.5, 'due now'],
+    [now, 'due now'],
+    [now - 59, 'due now'],
+    [now - 60, 'overdue 1m'],
+    [now - 2 * 86_400 - 3600, 'overdue 2d 1h'],
+  ])('%d -> %s', (ts, expected) => {
+    expect(formatCountdown(ts, now)).toBe(expected);
+  });
+
+  it.each([null, 0, NaN])('%s -> placeholder', (ts) => {
+    expect(formatCountdown(ts, now)).toBe(PLACEHOLDER);
+  });
+
+  it('counts down as the clock ticks', () => {
+    expect(formatCountdown(now + 61, now)).toBe('in 1m 1s');
+    expect(formatCountdown(now + 61, now + 1)).toBe('in 1m');
+    expect(formatCountdown(now + 61, now + 2)).toBe('in 59s');
+  });
+});
+
+describe('formatRelativeTime for timer runs', () => {
+  const now = 1_794_200_000;
+  it.each([
+    [now - 7200, '2h ago'],
+    [now - 3, 'just now'],
+    [now - 90, '1m ago'],
+    [now - 8 * 86_400, '8d ago'],
+    [now + 600, 'in 10m'],
+  ])('%d -> %s', (ts, expected) => {
+    expect(formatRelativeTime(ts, now)).toBe(expected);
   });
 });

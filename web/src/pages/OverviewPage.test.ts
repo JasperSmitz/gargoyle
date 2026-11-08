@@ -153,18 +153,33 @@ describe('OverviewPage', () => {
 
   it('renders timers, checks and recent events when present', () => {
     renderOverview();
-    const timers = within(section('Timers')).getAllByRole('listitem');
-    // The message explains the failure once; the meta line keeps only the timing.
+    const timers = within(section('Timers')).getAllByRole('row').slice(1);
+    // The last-run column explains the failure, so the message is not repeated under the name.
     expect(timers[0]?.textContent?.match(/exit-code \(status 1\)/g)).toHaveLength(1);
-    expect(timers[0]?.textContent).toContain('last 2h ago');
-    expect(timers[0]?.textContent).toContain('next in 21h');
-    expect(timers[1]?.textContent?.match(/never run/g)).toHaveLength(1);
+    expect(timers[0]?.textContent).toContain('2h ago');
+    expect(timers[0]?.textContent).toContain('in 21h 13m');
+    expect(timers[1]?.textContent?.match(/never run/gi)).toHaveLength(1);
 
     expect(section('Checks').textContent).toContain('3.1 ms');
     const events = within(section('Recent events')).getAllByRole('listitem');
     expect(events).toHaveLength(3);
     expect(events[0]?.textContent).toContain('minecraft.service');
     expect(events[0]?.textContent).toMatch(/Healthy\s*→\s*Critical/);
+    expect(within(section('Recent events')).getByRole('link', { name: 'All events' })).toBeTruthy();
+  });
+
+  it('links services, timers and problems to their detail pages', () => {
+    renderOverview();
+    const links = (name: string) =>
+      screen.getAllByRole('link', { name }).map((a) => a.getAttribute('href'));
+    expect(links('Minecraft')).toEqual([
+      '#/services/minecraft.service',
+      '#/services/minecraft.service',
+    ]);
+    expect(links('Music sync')).toEqual(['#/timers/music-sync.timer', '#/timers/music-sync.timer']);
+    // System problems lead to the charts; checks have no page yet, so no link.
+    expect(links('Disk /')).toEqual(['#/system']);
+    expect(screen.queryByRole('link', { name: 'Music HTTP' })).toBeNull();
   });
 
   it('shows an empty state with a config hint and hides empty optional sections', () => {

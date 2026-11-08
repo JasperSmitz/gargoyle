@@ -11,6 +11,7 @@
     id,
     health,
     message,
+    href,
     meta,
   }: {
     name: string;
@@ -18,6 +19,8 @@
     id?: string;
     health: Health;
     message: string | null;
+    /** Detail page; the name becomes a link to it. */
+    href?: string;
     /** Secondary facts (state, last run, latency, ...). */
     meta?: Snippet;
   } = $props();
@@ -26,7 +29,7 @@
 <li class="row" data-health={health}>
   <div class="main">
     <div class="names">
-      <span class="name">{name}</span>
+      {#if href}<a class="name" {href}>{name}</a>{:else}<span class="name">{name}</span>{/if}
       {#if id && id !== name}<code class="id">{id}</code>{/if}
     </div>
     {#if meta}<div class="meta">{@render meta()}</div>{/if}
@@ -76,6 +79,17 @@
   .name {
     font-weight: var(--weight-medium);
     overflow-wrap: anywhere;
+  }
+
+  a.name {
+    color: inherit;
+    text-decoration-color: var(--color-border-strong);
+    text-underline-offset: 0.2em;
+  }
+
+  a.name:hover {
+    color: var(--color-accent-hover);
+    text-decoration-color: currentColor;
   }
 
   .id {

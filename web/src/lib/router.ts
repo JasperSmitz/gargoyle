@@ -1,10 +1,14 @@
 // Hash routing (`/#/services/nginx.service`): the backend serves only `/`, so no server-side
-// fallback is needed (ARCHITECTURE §6). Pages are added by extending ROUTES and App's page switch,
-// e.g. `{ name: 'service', pattern: '/services/:unit' }`.
+// fallback is needed (ARCHITECTURE §6). Pages are added by extending ROUTES and App's page switch.
+
+import type { TargetKind } from './api/types';
 
 const ROUTES = [
   { name: 'overview', pattern: '/' },
   { name: 'system', pattern: '/system' },
+  { name: 'events', pattern: '/events' },
+  { name: 'service', pattern: '/services/:unit' },
+  { name: 'timer', pattern: '/timers/:unit' },
 ] as const satisfies readonly {
   name: string;
   pattern: string;
@@ -73,6 +77,23 @@ export function hrefWithQuery(
   }
   const encoded = params.toString();
   return href(...parts) + (encoded ? `?${encoded}` : '');
+}
+
+/**
+ * Where a target is shown in detail. Checks have no page yet, and system targets
+ * (`cpu`, `disk:/`) all live on the System page.
+ */
+export function targetHref(kind: TargetKind, target: string): string | null {
+  switch (kind) {
+    case 'service':
+      return href('services', target);
+    case 'timer':
+      return href('timers', target);
+    case 'system':
+      return href('system');
+    case 'check':
+      return null;
+  }
 }
 
 function segments(path: string): string[] {

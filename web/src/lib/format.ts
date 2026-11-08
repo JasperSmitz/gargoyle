@@ -84,6 +84,21 @@ export function formatRelativeTime(ts: number | null, now: number): string {
   return diff > 0 ? `${text} ago` : `in ${text}`;
 }
 
+/** A next run this close behind `now` is still "due now": systemd may take a moment to fire it. */
+const DUE_GRACE_SECONDS = 60;
+
+/**
+ * Time until `ts` as a ticking countdown, two units: `in 3h 12m`, `in 42s`. A time just passed
+ * reads `due now`; one well past reads `overdue 5m`, since a next run should never be behind.
+ */
+export function formatCountdown(ts: number | null, now: number): string {
+  if (!isTimestamp(ts) || !Number.isFinite(now)) return PLACEHOLDER;
+  const diff = Math.floor(ts - now);
+  if (diff >= 1) return `in ${formatDuration(diff)}`;
+  if (-diff < DUE_GRACE_SECONDS) return 'due now';
+  return `overdue ${formatDuration(-diff)}`;
+}
+
 /** Absolute local date and time, for tooltips next to relative times. */
 export function formatTimestamp(ts: number | null): string {
   if (!isTimestamp(ts)) return PLACEHOLDER;

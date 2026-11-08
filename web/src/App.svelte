@@ -13,15 +13,22 @@
   import { OverviewFeed, describeFeedError } from './lib/overview-feed.svelte';
   import type { Visibility } from './lib/poller';
   import { hashQuery, href, parseHash } from './lib/router';
+  import { parseEventFilters } from './lib/event-filters';
+  import EventsPage from './pages/EventsPage.svelte';
   import OverviewPage from './pages/OverviewPage.svelte';
+  import ServicePage from './pages/ServicePage.svelte';
   import SystemPage from './pages/SystemPage.svelte';
+  import TimerPage from './pages/TimerPage.svelte';
 
   // Props exist for tests; the app itself mounts App with none.
   let {
     client = api,
     visibility,
   }: {
-    client?: Pick<ApiClient, 'overview' | 'metrics' | 'metricsQuery'>;
+    client?: Pick<
+      ApiClient,
+      'overview' | 'metrics' | 'metricsQuery' | 'service' | 'timer' | 'events'
+    >;
     visibility?: Visibility;
   } = $props();
 
@@ -46,7 +53,9 @@
 
   let hash = $state(location.hash);
   const route = $derived(parseHash(hash));
-  const range = $derived(parseRange(hashQuery(hash).get('range')));
+  const query = $derived(hashQuery(hash));
+  const range = $derived(parseRange(query.get('range')));
+  const eventFilters = $derived(parseEventFilters(query));
   let now = $state(Date.now() / 1000);
 
   // Keyed on the name only: a new route object for the same page must not restart the feed.
@@ -68,6 +77,7 @@
   });
 
   const failure = $derived(feed.error === null ? null : describeFeedError(feed.error));
+  const serverNow = $derived(now + feed.clockOffset);
 </script>
 
 <svelte:window onhashchange={() => (hash = location.hash)} />
@@ -94,12 +104,24 @@
 
   {#if route.name === 'overview'}
     {#if feed.data}
-      <OverviewPage overview={feed.data} serverNow={now + feed.clockOffset} {history} />
+      <OverviewPage overview={feed.data} {serverNow} {history} />
     {:else if !failure}
       <OverviewSkeleton />
     {/if}
   {:else if route.name === 'system'}
     <SystemPage {range} {client} {visibility} />
+  {:else if route.name === 'timer'}
+    {#key route.params.unit}
+      <TimerPage unit={route.params.unit ?? ''} {client} {visibility} {serverNow} />
+    {/key}
+  {:else if route.name === 'service'}
+    {#key route.params.unit}
+      <ServicePage unit={route.params.unit ?? ''} {range} {client} {visibility} {serverNow} />
+    {/key}
+  {:else if route.name === 'events'}
+    {#key `${eventFilters.kind}|${eventFilters.target}`}
+      <EventsPage filters={eventFilters} {client} overview={feed.data} {visibility} {serverNow} />
+    {/key}
   {:else}
     <EmptyState title="Page not found">
       Nothing lives at <code>{route.path}</code>. <a href={href()}>Back to the overview</a>

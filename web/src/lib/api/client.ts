@@ -7,6 +7,7 @@ import type {
   MetricsQuery,
   MetricsResponse,
   Overview,
+  TargetKind,
   ServiceDetail,
   ServicesResponse,
   TimerDetail,
@@ -152,7 +153,14 @@ export function createClient({ fetch: fetchImpl, baseUrl = '/api/v1' }: ClientOp
         req,
       ),
     events: (
-      opts: { since?: UnixSeconds; until?: UnixSeconds; target?: string; limit?: number } = {},
+      opts: {
+        since?: UnixSeconds;
+        /** Exclusive. */
+        until?: UnixSeconds;
+        target?: string;
+        kind?: TargetKind;
+        limit?: number;
+      } = {},
       req?: RequestOptions,
     ) => get<EventsResponse>('/events', opts, req),
   };

@@ -19,7 +19,16 @@ export const RESOLUTIONS = ['raw', '5m'] as const;
 export type Resolution = (typeof RESOLUTIONS)[number];
 
 // ARCHITECTURE §5, series keys table.
-export const SERIES_UNITS = ['percent', 'load', 'bytes', 'bytes_per_s', 'celsius', 'ms'] as const;
+// `count` (service.restarts:<unit>) is announced by the backend track for M3.5.
+export const SERIES_UNITS = [
+  'percent',
+  'load',
+  'bytes',
+  'bytes_per_s',
+  'celsius',
+  'ms',
+  'count',
+] as const;
 export type SeriesUnit = (typeof SERIES_UNITS)[number];
 
 /** Unix seconds (integer). */

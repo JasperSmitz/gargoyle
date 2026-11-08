@@ -1,8 +1,9 @@
 // Generated `/metrics` and `/metrics/query` responses for the dev mock. Values are a pure function
-// of (series key, time), so every range and every refresh agrees with itself: zooming from 1y to
+// of (series key, time) (minecraft's restarts also of "now", see MINECRAFT), so every range and every refresh agrees with itself: zooming from 1y to
 // 1h shows the same history, just finer. A short outage every 3.5 days leaves null buckets so
 // gaps can be seen, and resolution/step follow ARCHITECTURE §5 (raw for ≤ 6h within 48h).
 
+import { fixtures } from '../src/lib/api/fixtures';
 import type { MetricPoint, MetricsQuery, SeriesInfo, SeriesUnit } from '../src/lib/api/types';
 
 const HOST = 'debian-box';
@@ -29,6 +30,11 @@ const SERIES: [key: string, unit: SeriesUnit][] = [
   ['net.tx:enp1s0', 'bytes_per_s'],
   ['temp:coretemp/Package id 0', 'celsius'],
   ['check.latency:Music HTTP', 'ms'],
+  // Only the running service: minecraft.service has never reported memory, like a real unit
+  // that failed before the first sample, which the service page shows as "no data".
+  ['service.memory:navidrome.service', 'bytes'],
+  ['service.restarts:navidrome.service', 'count'],
+  ['service.restarts:minecraft.service', 'count'],
 ];
 
 export function seriesInfo(): SeriesInfo[] {
@@ -43,7 +49,15 @@ export function seriesInfo(): SeriesInfo[] {
   });
 }
 
-export class QueryError extends Error {}
+export class QueryError extends Error {
+  constructor(
+    message: string,
+    /** The backend's error code: `unknown_series` for a key it never stored. */
+    readonly code: 'bad_request' | 'unknown_series' = 'bad_request',
+  ) {
+    super(message);
+  }
+}
 
 /** Answers `/metrics/query` for `params` as the backend would, at server time `now`. */
 export function query(params: URLSearchParams, now: number): MetricsQuery {
@@ -53,7 +67,7 @@ export function query(params: URLSearchParams, now: number): MetricsQuery {
   const keys = requested.flatMap((key) => {
     if (key.endsWith('*')) return SERIES.filter(([k]) => k.startsWith(key.slice(0, -1)));
     const match = SERIES.find(([k]) => k === key);
-    if (!match) throw new QueryError(`unknown series key: ${key}`);
+    if (!match) throw new QueryError(`unknown series key: ${key}`, 'unknown_series');
     return [match];
   });
 
@@ -95,7 +109,7 @@ function bucket(key: string, start: number, step: number, now: number): MetricPo
   for (let i = 0; i < samples; i += 1) {
     const t = start + Math.floor((i * step) / samples);
     if (t > now || inOutage(t)) continue;
-    values.push(sample(key, t));
+    values.push(sample(key, t, now));
   }
   if (values.length === 0) return [start, null, null, null];
   const avg = values.reduce((a, b) => a + b, 0) / values.length;
@@ -108,8 +122,32 @@ function inOutage(t: number): boolean {
 
 const DAY = 86_400;
 
-/** The metric at time `t`: daily rhythm, slower drifts and per-sample jitter. */
-function sample(key: string, t: number): number {
+/**
+ * The overview's minecraft.service failed `ago` seconds before "now" after `restarts` restarts
+ * (mock-api keeps that offset when it shifts the example to the current time). Its restart
+ * series is built from the same numbers so the chart ends where the summary's count is.
+ */
+const MINECRAFT = (() => {
+  const overview = fixtures['overview.json'];
+  const service = overview.services.find((s) => s.unit === 'minecraft.service');
+  return { ago: overview.ts - (service?.since ?? overview.ts), restarts: service?.restarts ?? 0 };
+})();
+const RESTART_SPACING = 20 * 60;
+
+/** NRestarts at `t`: one restart every 20 minutes before the failure, then the final count. */
+function minecraftRestarts(t: number, now: number): number {
+  const failedAt = now - MINECRAFT.ago;
+  const done = Math.floor(
+    (t - (failedAt - MINECRAFT.restarts * RESTART_SPACING)) / RESTART_SPACING,
+  );
+  return Math.min(MINECRAFT.restarts, Math.max(0, done));
+}
+
+/**
+ * The metric at time `t`: daily rhythm, slower drifts and per-sample jitter. Only the minecraft
+ * restart series depends on `now`, because the failure it leads up to is anchored to now.
+ */
+function sample(key: string, t: number, now: number): number {
   const daily = Math.sin((2 * Math.PI * (t - 6 * 3600)) / DAY);
   const jitter = noise(key, Math.floor(t / RAW_INTERVAL));
   const cpu = clamp(16 + 9 * daily + 5 * Math.sin(t / 3700) + 10 * jitter ** 3, 0.5, 100);
@@ -141,6 +179,14 @@ function sample(key: string, t: number): number {
       return 38 + cpu * 0.35 + 2 * jitter;
     case 'check.latency:Music HTTP':
       return 2.5 + 2 * jitter ** 4 + (jitter > 0.995 ? 120 : 0);
+    case 'service.memory:navidrome.service':
+      // A slow leak that a weekly restart resets, plus activity in the evening.
+      return 1024 ** 2 * (120 + 60 * ((t / (7 * DAY)) % 1) + 25 * (daily + 1) + 6 * jitter);
+    case 'service.restarts:navidrome.service':
+      // Matches the example's `restarts: 0`.
+      return 0;
+    case 'service.restarts:minecraft.service':
+      return minecraftRestarts(t, now);
     default:
       return 0;
   }

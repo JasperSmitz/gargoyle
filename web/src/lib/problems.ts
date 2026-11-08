@@ -5,6 +5,7 @@
 import type { Health, Overview, TargetKind } from './api/types';
 import { formatLoad, formatPercent, isTimestamp } from './format';
 import { HEALTH_PRESENTATION, needsAttention, sortBySeverity } from './health';
+import { targetHref } from './router';
 
 export interface Problem {
   kind: TargetKind;
@@ -13,6 +14,8 @@ export interface Problem {
   name: string;
   health: Health;
   message: string;
+  /** The page with more detail, if there is one. */
+  href: string | null;
 }
 
 export function collectProblems(overview: Overview): Problem[] {
@@ -20,7 +23,8 @@ export function collectProblems(overview: Overview): Problem[] {
   const problems: Problem[] = [];
 
   const add = (kind: TargetKind, id: string, name: string, health: Health, message: string) => {
-    if (needsAttention(health)) problems.push({ kind, id: `${kind}:${id}`, name, health, message });
+    if (!needsAttention(health)) return;
+    problems.push({ kind, id: `${kind}:${id}`, name, health, message, href: targetHref(kind, id) });
   };
 
   if (!isTimestamp(system.ts)) {

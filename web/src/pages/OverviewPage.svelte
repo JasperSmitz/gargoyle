@@ -6,8 +6,8 @@
   import ServiceList from '../components/overview/ServiceList.svelte';
   import StatusSummary from '../components/overview/StatusSummary.svelte';
   import SystemCards from '../components/overview/SystemCards.svelte';
-  import TimerList from '../components/overview/TimerList.svelte';
   import Section from '../components/Section.svelte';
+  import TimerTable from '../components/timers/TimerTable.svelte';
 
   // Order is the hierarchy: verdict and problems, then the system, then each kind of target.
   let {
@@ -31,12 +31,19 @@
 
   <div class="columns">
     <ServiceList services={overview.services} {serverNow} />
-    {#if overview.timers.length > 0}<TimerList timers={overview.timers} {serverNow} />{/if}
     {#if overview.checks.length > 0}<CheckList checks={overview.checks} {serverNow} />{/if}
-    {#if overview.recentEvents.length > 0}
-      <EventList events={overview.recentEvents} {serverNow} />
-    {/if}
   </div>
+
+  <!-- Full width: four columns of timings need the room. -->
+  {#if overview.timers.length > 0}
+    <Section title="Timers" count={overview.timers.length}>
+      <TimerTable timers={overview.timers} {serverNow} />
+    </Section>
+  {/if}
+
+  {#if overview.recentEvents.length > 0}
+    <EventList events={overview.recentEvents} {serverNow} />
+  {/if}
 </div>
 
 <style>

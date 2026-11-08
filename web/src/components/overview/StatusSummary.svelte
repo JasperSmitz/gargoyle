@@ -41,7 +41,11 @@
         <li class="problem health-{problem.health}">
           <HealthIcon health={problem.health} />
           <span class="what">
-            <span class="name">{problem.name}</span>
+            {#if problem.href}
+              <a class="name" href={problem.href}>{problem.name}</a>
+            {:else}
+              <span class="name">{problem.name}</span>
+            {/if}
             <span class="kind">{KIND_LABEL[problem.kind]}</span>
           </span>
           <span class="message">{problem.message}</span>
@@ -133,6 +137,17 @@
   .name {
     font-weight: var(--weight-medium);
     overflow-wrap: anywhere;
+  }
+
+  a.name {
+    color: inherit;
+    text-decoration-color: var(--color-border-strong);
+    text-underline-offset: 0.2em;
+  }
+
+  a.name:hover {
+    color: var(--color-accent-hover);
+    text-decoration-color: currentColor;
   }
 
   .kind {

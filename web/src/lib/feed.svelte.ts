@@ -7,6 +7,9 @@ import { createPoller, type Poller, type Visibility } from './poller';
 /** ARCHITECTURE §6: charts refresh every 60s. */
 export const CHART_POLL_MS = 60_000;
 
+/** Unit state changes once per `units_interval` (default 30s), so detail pages poll that often. */
+export const DETAIL_POLL_MS = 30_000;
+
 export interface PolledFeedOptions {
   intervalMs?: number;
   visibility?: Visibility;
