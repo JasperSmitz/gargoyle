@@ -23,7 +23,7 @@ the same change.
 | M4 Checks & health polish | ✅ Done (2026-11-08) |
 | M5 Security hardening | ✅ Done (2026-11-08) |
 | M6 Packaging & docs | ✅ Done, Debian install test pending (2026-11-08) |
-| M7 Music library report (Liner) | 🔵 Contract frozen (M7.0, 2026-11-08); M7.1–M7.5 open |
+| M7 Music library report (Liner) | 🔵 M7.0–M7.4 done (2026-11-08); M7.5 review open |
 
 ---
 
@@ -413,6 +413,14 @@ change the contract to make them green. A needed change goes back to the coordin
 - **M7.5** Independent review of the whole milestone, including a security pass over the new
   file-read path (size cap, file type, no path or `root` in responses, messages as text in the
   UI).
+
+**Status (2026-11-08).** M7.0–M7.3 are merged. M7.4 is done: README and screenshots (Library
+page, and the overview refreshed now that it has a library card), `check-config` run with the
+CONFIG.md and DEPLOYMENT.md `[library]` examples and each validation rule, a real `liner scan`
+report served end to end (unreadable file, rename, deletion, `chmod 000` and back), and the two
+Liner units verified with `systemd-analyze verify` on scratch copies (clean apart from
+`/usr/local/bin/liner` not existing on the dev box). One minor Library page issue went to
+KNOWN_ISSUES. The acceptance list below is left for the M7.5 review to tick.
 
 **Parallel.** M7.1 → M7.2 (backend developer) ∥ M7.3 (frontend developer), then M7.4, then
 M7.5. The frontend develops against the example JSON first and against `make dev` once M7.2

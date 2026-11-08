@@ -401,8 +401,9 @@ Nice=10
 IOSchedulingClass=idle
 ```
 
-- **`--fail-on never` is required.** Without it Liner exits 1 whenever the library has an issue,
-  and the timer shows as failed although the scan worked. Real failures (an unreadable library
+- **`--fail-on never` is required.** Without it Liner exits 1 whenever the library has an
+  error-level issue or an unreadable file (its default is `--fail-on error`), and the timer shows
+  as failed although the scan worked. Real failures (an unreadable library
   root, an unwritable report) still exit 2 and still fail the unit.
 - Do not add `--min-severity`: issues it hides are hidden from Gargoyle too. (The Library page
   says how many were hidden.)

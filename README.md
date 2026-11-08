@@ -3,7 +3,8 @@
 Gargoyle is a small, read-only monitoring dashboard for one personal Linux server. It is a single
 Rust binary with an embedded SQLite database and an embedded web UI: no agents, no exporters, no
 external database. It shows the host's system metrics, the systemd services and timers you care
-about, and a few HTTP/TCP checks, and keeps their history.
+about, a few HTTP/TCP checks and, optionally, the metadata health of a music library, and keeps
+their history.
 
 ![Overview page, light theme](docs/screenshots/overview.png)
 
@@ -18,6 +19,11 @@ about, and a few HTTP/TCP checks, and keeps their history.
 - **Checks:** HTTP(S) and TCP probes with latency thresholds and consecutive-failure counting.
 - **History:** charts for 1h, 6h, 24h, 7d, 30d and 1y. Full-resolution samples are kept for 48 hours
   and 5-minute rollups for 400 days by default.
+- **Music library:** the metadata health of a music library (missing or duplicate track numbers,
+  split albums, unreadable files and more), read from the JSON report of
+  [Liner](docs/DEPLOYMENT.md#music-library-report-liner), a separate linter that Gargoyle never
+  runs. Issues are grouped per album and filterable by severity; the library warns when the
+  report shows problems or gets too old, and is never critical.
 - **Events:** a log of every health change, filterable per target.
 - **Health:** every target is healthy, warning, critical or unknown with a short reason, rolled up
   into one overall state (rules in [ARCHITECTURE §8](docs/ARCHITECTURE.md#8-health-model)).
@@ -32,7 +38,10 @@ about, and a few HTTP/TCP checks, and keeps their history.
 |---|---|---|
 | ![System page, 24h range, dark theme](docs/screenshots/system-24h-dark.png) | ![Timer detail with run history](docs/screenshots/timer-detail.png) | ![Overview on a 360 px wide screen, dark theme](docs/screenshots/mobile-overview-dark.png) |
 
-The screenshots show the built-in mock collector, which generates demo data.
+![Library page with one album expanded, light theme](docs/screenshots/library.png)
+
+The screenshots show the built-in mock collector, which generates demo data, and the synthetic
+Liner report in `config/liner-report.dev.json`.
 
 ## Quick start: development
 

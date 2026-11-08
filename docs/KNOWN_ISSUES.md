@@ -9,4 +9,5 @@ Keep entries short; remove them when fixed.
 | Collector | An unparseable optional systemd property logs a warning every units tick (no dedupe). | if noisy |
 | Health | iowait is shown but not part of health evaluation. | — |
 | Checks | A check's transitions are evaluated only after its own probe. If its loop ever stalled (probes are bounded by `timeout ≤ interval`, so it should not), the API would show `unknown` but no event would be logged. | — |
+| Web | Library page: when an album is opened and closed again within the same moment (two synthetic key presses with no delay in a headless browser; not reproduced with a real double-click), a following **Expand all** can leave that album closed. **Collapse all** then **Expand all** recovers. Found in the M7.4 keyboard pass; cause not investigated (likely the async `toggle` event against the `bind:open` getter/setter). | if seen in real use |
 | Checks | `https` checks trust only the built-in Mozilla roots (webpki-roots), so a target with a self-signed or internal-CA certificate always fails with an "invalid peer certificate" reason. | if needed |

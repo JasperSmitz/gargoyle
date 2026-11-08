@@ -6,7 +6,8 @@ a release and after any change to layout, tokens or navigation.
 ## Automated (runs in `make check`)
 
 - `src/a11y.test.ts`: axe-core in jsdom on the overview (normal, nothing configured, offline
-  on first load, loading), System, service, timer and check detail, an unknown timer, Events and
+  on first load, loading, without a library), System, service, timer and check detail, an
+  unknown timer, Library (normal, filtered, no valid report, not configured), Events and
   not-found. Fails on any **serious** or **critical** violation. jsdom has no layout, so
   `color-contrast` is disabled there and checked by hand below.
 - `src/csp.test.ts`: no inline `<script>`, no inline `style="…"` attributes, no runtime `<style>`
@@ -31,6 +32,16 @@ Use a real browser, no mouse. Do it at desktop width and at 360px.
       keeps focus on that select.
 - [ ] Charts: **Show table** is reachable, toggles with <kbd>Enter</kbd>/<kbd>Space</kbd>, and
       announces its expanded state.
+- [ ] Overview: the library card's link and the library row in "needs attention" open the
+      Library page with <kbd>Enter</kbd>. Without `[library]` there is no Library nav entry.
+- [ ] Library: tab order is the severity filter (All, Warnings and errors, Errors only),
+      **Expand all**, **Collapse all**, then each album summary. The current filter is marked
+      (`aria-current`); choosing one with <kbd>Enter</kbd> updates the URL (`?severity=…`) and
+      keeps focus on it.
+- [ ] Library: each album summary opens and closes with <kbd>Enter</kbd> and <kbd>Space</kbd>,
+      and **Expand all**/**Collapse all** open and close every shown album without moving focus.
+      Issue severities show an icon and text, not color alone. At 360px the paths wrap and the
+      page has no horizontal scroll.
 - [ ] Events: **Load older events** is reachable. Offline banner: **Retry now** is reachable.
       401 banner: **Reload** is reachable.
 
