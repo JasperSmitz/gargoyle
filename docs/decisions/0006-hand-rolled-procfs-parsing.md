@@ -10,7 +10,7 @@ Gargoyle needs CPU, memory, load, uptime, disks, network and temperatures on Lin
 ## Decision
 
 Write small, pure parsers for `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/uptime`,
-`/proc/self/mounts`, `/proc/net/dev` and `/sys/class/{hwmon,thermal}`. `statvfs` comes from
+`/proc/self/mountinfo`, `/proc/net/dev` and `/sys/class/{hwmon,thermal}`. `statvfs` comes from
 `rustix`. All paths are resolved under a configurable `root` so that tests run against fixture
 trees.
 
