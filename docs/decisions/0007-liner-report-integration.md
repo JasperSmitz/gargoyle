@@ -108,14 +108,23 @@ not configured). The view:
   (`issuesTotal`, `issuesTruncated`), at most **50 paths per issue** (`pathsTotal`) and the
   **first 100 errors** (`errorsTotal`, `errorsTruncated`). These arrays are cut while parsing
   (a capped serde visitor), not after, so a report within 32 MiB cannot take many times that in
-  memory; `issues_by_code` is limited to 1000 codes. Every report string is cut to 1 KiB (4 KiB
-  for paths and album ids) with `…`, and paths share a 2 MiB budget over the view (ARCHITECTURE
-  §6). The worst response is then a few MB, and a normal one tens of KB. `State` holds the view
+  memory. Elements beyond the path and error caps are only counted: they are skipped without
+  type checks, so a malformed 51st path does not make the report invalid. `issues_by_code` is
+  limited to 1000 codes and `albums` (kept whole, for the issues' album titles) to 100,000
+  albums, far above a real library; a report beyond either is invalid, with the usual
+  `invalid report (line, column)` message and the limit in the log. Every report string is cut
+  to 1 KiB (4 KiB for paths and album ids) with `…`, after control characters (C0, C1,
+  U+2028/U+2029) are replaced with U+FFFD, since serde_json would write each C0 control as a
+  6-byte `\u0001`. Paths share a 2 MiB budget over the view (ARCHITECTURE §6). JSON escaping
+  then at most doubles a string (`"`, `\`), so the worst response is about 10 MB, and a normal
+  one tens of KB. `State` holds the view
   behind an `Arc`, so a request does not copy it;
 - issue counts per code come as a list sorted by count, then code (codes are data and are not
   camelCased as keys);
 - `message` texts are passed through as plain text (Liner guarantees one line with control
-  characters escaped), and the UI never renders them as HTML.
+  characters escaped), and the UI never renders them as HTML. Paths are rendered as one text
+  node each, wrapped by `overflow-wrap: anywhere`, without `<wbr>` break points: a view holds up
+  to 25,000 paths, and per-separator elements multiplied into millions.
 
 **What is not exposed:** the configured report path (a config path, §9.4; messages never name
 it) and Liner's `root` (the absolute library location on the host). The UI does not need either:

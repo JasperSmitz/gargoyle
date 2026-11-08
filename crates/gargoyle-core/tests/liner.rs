@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use gargoyle_core::api::{IssueScope, Severity, SeverityCounts};
 use gargoyle_core::liner::{
-    MAX_CODES, MAX_ERRORS, MAX_ISSUES, MAX_PATHS, ReportError, build_view, parse_report,
-    parse_report_bytes,
+    MAX_ALBUMS, MAX_CODES, MAX_ERRORS, MAX_ISSUES, MAX_PATHS, ReportError, build_view,
+    parse_report, parse_report_bytes,
 };
 use serde_json::{Value, json};
 
@@ -260,6 +260,17 @@ fn too_many_issue_codes_are_invalid() {
         "{}",
         e.detail
     );
+}
+
+/// Re-review M7.5 R3: every album is kept, so their number is bounded instead.
+#[test]
+fn too_many_albums_are_invalid() {
+    let mut report: Value = serde_json::from_str(&fixture("golden-report.json")).unwrap();
+    let album = json!({"id": "", "disc_count": 0, "track_count": 0});
+    report["albums"] = Value::Array(vec![album; MAX_ALBUMS + 1]);
+    let e = parse_report(&report.to_string()).expect_err("too many albums");
+    assert!(matches!(e.error, ReportError::Invalid { .. }), "{e:?}");
+    assert!(e.detail.contains("more than 100000 albums"), "{}", e.detail);
 }
 
 /// The version probe skips a non-string `schema_version` instead of building it.

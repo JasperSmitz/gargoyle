@@ -1,7 +1,8 @@
 //! The API view of a report: grouping, ordering and caps (ARCHITECTURE §6, `LibraryReport`).
 //!
-//! Counts are capped while parsing (`de`); here every report string is also capped in bytes, so
-//! the response stays at a few MB whatever the report holds.
+//! Counts are capped while parsing (`de`); here every report string is also capped in bytes, with
+//! control characters replaced, so the response stays at about 10 MB at worst whatever the report
+//! holds.
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -28,8 +29,8 @@ pub const PATH_BUDGET_BYTES: usize = 2 * 1024 * 1024;
 
 const ELLIPSIS: &str = "…";
 
-/// Builds the view the API serves. The worst response stays at a few MB, whatever the report
-/// size.
+/// Builds the view the API serves. The worst response stays at about 10 MB, whatever the report
+/// holds (`"` and `\\` escape to 2 bytes; see `clip`).
 pub fn build_view(report: &LinerReport) -> LibraryReport {
     // Stable, so the report's order is kept within a severity. Parsing already did this; a
     // `LinerReport` built by hand may not have.
@@ -143,17 +144,28 @@ fn empty_album(id: String, album: Option<&Album>) -> LibraryAlbum {
     }
 }
 
-/// `text`, or if it is longer than `max` bytes its start (cut on a char boundary) and `…`, `max`
-/// bytes at most.
+/// `text` with control characters replaced, or if that is longer than `max` bytes its start (cut
+/// on a char boundary) and `…`, `max` bytes at most.
+///
+/// C0 and C1 controls and U+2028/U+2029 become U+FFFD before measuring: serde_json writes a C0
+/// control as `\u0001`, six bytes for one, so the caps would otherwise not bound the response.
+/// Now the worst escape is `"` or `\\`, two bytes for one. Only the kept prefix is scanned.
 fn clip(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_owned();
+    let mut out = String::new();
+    for c in text.chars() {
+        let c = if c.is_control() || c == '\u{2028}' || c == '\u{2029}' {
+            char::REPLACEMENT_CHARACTER
+        } else {
+            c
+        };
+        if out.len() + c.len_utf8() > max {
+            while out.len() + ELLIPSIS.len() > max && out.pop().is_some() {}
+            out.push_str(ELLIPSIS);
+            return out;
+        }
+        out.push(c);
     }
-    let mut end = max.saturating_sub(ELLIPSIS.len());
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}{ELLIPSIS}", &text[..end])
+    out
 }
 
 #[cfg(test)]
@@ -229,6 +241,8 @@ mod tests {
     }
 
     use Severity::{Error as E, Info as I, Warning as W};
+
+    const MIB: usize = 1024 * 1024;
 
     #[test]
     fn groups_and_orders() {
@@ -333,6 +347,42 @@ mod tests {
         assert_eq!(clip("abéééé", 8), "abé…");
         for max in 3..20 {
             assert!(clip(&"ü".repeat(20), max).len() <= max);
+        }
+    }
+
+    #[test]
+    fn clip_replaces_control_characters() {
+        assert_eq!(clip("a\u{1}b\tc\nd", 64), "a\u{FFFD}b\u{FFFD}c\u{FFFD}d");
+        assert_eq!(clip("\u{7f}\u{85}\u{9f}", 64), "\u{FFFD}".repeat(3));
+        assert_eq!(clip("x\u{2028}y\u{2029}", 64), "x\u{FFFD}y\u{FFFD}");
+        // Measured after the replacement: each U+FFFD is 3 bytes.
+        assert_eq!(clip(&"\u{1}".repeat(4), 8), "\u{FFFD}…");
+        assert_eq!(clip("é\u{2028}", 64), "é\u{FFFD}");
+    }
+
+    /// Re-review M7.5 R2: 500 issues whose code, message, album id and path are all control
+    /// characters serialized to 30.7 MB, because serde_json writes each as `\u0001` (6 bytes).
+    /// Replaced, every kept string serializes to at most 2× its byte cap (`"` and `\\`): per issue
+    /// 2 × (1 KiB code + 1 KiB message + 4 KiB album id + 4 KiB path) = 20 KiB, so 500 issues stay
+    /// under 10 MiB plus framing. Plain control characters stay at 1×, about 5 MiB.
+    #[test]
+    fn control_characters_do_not_inflate_the_response() {
+        for (fill, bound) in [('\u{1}', 6 * MIB), ('"', 11 * MIB), ('\\', 11 * MIB)] {
+            let text = |n: usize| fill.to_string().repeat(n);
+            let issues = (0..MAX_ISSUES)
+                .map(|i| {
+                    let mut e = issue("c", E, Some(&format!("{i}{}", text(MAX_PATH_BYTES))));
+                    e.code = text(MAX_TEXT_BYTES);
+                    e.message = text(MAX_TEXT_BYTES);
+                    e.paths = vec![text(MAX_PATH_BYTES)];
+                    e
+                })
+                .collect();
+            let v = build_view(&report(issues, vec![], 0));
+            assert_eq!(v.albums.len(), MAX_ISSUES);
+            assert!(v.albums.iter().all(|a| a.issues[0].paths.len() == 1));
+            let len = serde_json::to_string(&v).unwrap().len();
+            assert!(len < bound, "{fill:?}: {len} bytes");
         }
     }
 

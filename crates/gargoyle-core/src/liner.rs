@@ -7,7 +7,8 @@
 //! `issues[].details` and the absolute `root` are never deserialized.
 //!
 //! Arrays that can be long (`issues`, `paths`, `errors`) are cut to what the view keeps while
-//! parsing (`de`), so a report within [`MAX_REPORT_BYTES`] cannot take many times its size in
+//! parsing (`de`), and `albums` (all kept, for the issues' album titles) is refused beyond
+//! [`MAX_ALBUMS`], so a report within [`MAX_REPORT_BYTES`] cannot take many times its size in
 //! memory.
 //!
 //! Errors never carry report content or the file path, so their `Display` can go to the API
@@ -24,8 +25,8 @@ mod de;
 mod time;
 mod view;
 
-pub use de::MAX_CODES;
 use de::{Capped, ProbedVersion, WorstIssues};
+pub use de::{MAX_ALBUMS, MAX_CODES};
 pub use time::parse_rfc3339;
 pub use view::{
     MAX_ERRORS, MAX_ISSUES, MAX_PATH_BYTES, MAX_PATHS, MAX_TEXT_BYTES, PATH_BUDGET_BYTES,
@@ -46,6 +47,7 @@ pub struct LinerReport {
     pub generated_at: i64,
     pub options: Options,
     pub summary: Summary,
+    /// At most [`MAX_ALBUMS`]; a report with more is invalid.
     pub albums: Vec<Album>,
     /// The worst [`MAX_ISSUES`], in severity order (error first), report order within one.
     pub issues: Vec<Issue>,
@@ -144,6 +146,7 @@ struct RawReport {
     generated_at: String,
     options: Options,
     summary: Summary,
+    #[serde(deserialize_with = "de::albums")]
     albums: Vec<Album>,
     issues: WorstIssues,
     errors: Capped<FileError, MAX_ERRORS>,

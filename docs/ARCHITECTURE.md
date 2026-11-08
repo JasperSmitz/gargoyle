@@ -450,11 +450,15 @@ messages read `<reason> (<n> consecutive failure[s])`, e.g. `connection refused`
   report and `issuesTruncated` says whether any were dropped. Each issue keeps its first 50
   `paths`, and `pathsTotal` is the full number. The first 100 `errors` are kept (`errorsTotal`,
   `errorsTruncated`). `summary` always describes the whole report. Report strings are cut on a
-  character boundary and end in `…` beyond 4 KiB (paths, album `id`) or 1 KiB (all other text);
+  character boundary and end in `…` beyond 4 KiB (paths, album `id`) or 1 KiB (all other text),
+  after C0/C1 control characters and U+2028/U+2029 are replaced with U+FFFD (so JSON escaping
+  at most doubles a string, for `"` and `\`, and the worst response stays near 10 MB);
   albums whose ids only differ past the cut share one entry. Paths share a 2 MiB budget over the
   whole view, spent on the worst issues first: once it is spent, an issue lists fewer paths than
   50 (or none), and `pathsTotal` still counts them all. A `schemaVersion` that is not a short
-  semver is shown as `1.x`. A report with more than 1000 codes in `issues_by_code` is invalid.
+  semver is shown as `1.x`. A report with more than 1000 codes in `issues_by_code` or more than
+  100,000 `albums` is invalid (`invalid report (line <l>, column <c>)`, the limit in the log).
+  Array elements beyond the path and error caps are counted but skipped without type checks.
 - `minSeverity` and `summary.issuesHidden` are the report's `--min-severity` filter and the
   number of issues it removed, which Gargoyle cannot see either.
 

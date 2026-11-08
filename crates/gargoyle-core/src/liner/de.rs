@@ -9,13 +9,17 @@ use std::marker::PhantomData;
 
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
-use super::Issue;
 use super::view::MAX_ISSUES;
+use super::{Album, Issue};
 use crate::api::Severity;
 
 /// Distinct issue codes accepted in `summary.issues_by_code`. Liner has a few dozen rules; a
 /// report with more is not one Liner wrote.
 pub const MAX_CODES: usize = 1000;
+
+/// Albums accepted in `albums[]`. Far above a real library (a 32 MiB report of real albums holds
+/// about 40,000); it bounds what a report of minimal album objects costs to parse.
+pub const MAX_ALBUMS: usize = 100_000;
 
 /// The first `N` elements of a JSON array and how many it had. The rest are skipped without being
 /// stored or type-checked.
@@ -135,6 +139,34 @@ pub(super) fn codes<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, 
     d.deserialize_map(V)
 }
 
+/// `albums[]`, refused beyond [`MAX_ALBUMS`].
+pub(super) fn albums<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Album>, D::Error> {
+    struct V;
+
+    impl<'de> Visitor<'de> for V {
+        type Value = Vec<Album>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an array of albums")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut albums = Vec::new();
+            while let Some(album) = seq.next_element()? {
+                if albums.len() >= MAX_ALBUMS {
+                    return Err(de::Error::custom(format_args!(
+                        "more than {MAX_ALBUMS} albums"
+                    )));
+                }
+                albums.push(album);
+            }
+            Ok(albums)
+        }
+    }
+
+    d.deserialize_seq(V)
+}
+
 /// `schema_version` as the version probe sees it: a string, or anything else. Other values are
 /// skipped rather than built (a `serde_json::Value` would turn `[[],[],…]` into far more memory
 /// than the input).
@@ -222,6 +254,19 @@ mod tests {
         assert_eq!(parse(&map(MAX_CODES)).unwrap().len(), MAX_CODES);
         let e = parse(&map(MAX_CODES + 1)).unwrap_err();
         assert!(e.to_string().contains("more than 1000 issue codes"), "{e}");
+    }
+
+    #[test]
+    fn too_many_albums_are_refused() {
+        let list = |n: usize| {
+            let album =
+                r#"{"id":"a","title":null,"album_artist":null,"disc_count":1,"track_count":1}"#;
+            format!("[{}]", vec![album; n].join(","))
+        };
+        let parse = |text: &str| albums(&mut serde_json::Deserializer::from_str(text));
+        assert_eq!(parse(&list(MAX_ALBUMS)).unwrap().len(), MAX_ALBUMS);
+        let e = parse(&list(MAX_ALBUMS + 1)).unwrap_err();
+        assert!(e.to_string().contains("more than 100000 albums"), "{e}");
     }
 
     #[test]
