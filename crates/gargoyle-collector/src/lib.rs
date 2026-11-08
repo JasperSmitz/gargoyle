@@ -4,6 +4,10 @@
 //! else: no rates, no health, no storage. The data types live in [`gargoyle_core::model`] so pure
 //! code can use them without this crate; they are re-exported here for convenience.
 
+mod mock;
+
+pub use mock::MockCollector;
+
 pub use gargoyle_core::model::{
     CollectError, CpuCounters, CpuTimes, DiskUsage, HostInfo, MemoryInfo, NetCounters,
     SystemSnapshot, TempReading, TimerRunRecord, UnitRequest, UnitSnapshot,
