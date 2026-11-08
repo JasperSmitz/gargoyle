@@ -10,8 +10,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use gargoyle_core::api::{
-    ApiError, Event, EventList, HealthResponse, MetricList, MetricsQuery, Overview, ServiceDetail,
-    ServiceList, TargetKind, TimerDetail, TimerList, TimerRun,
+    ApiError, CheckDetail, CheckList, Event, EventList, HealthResponse, MetricList, MetricsQuery,
+    Overview, ServiceDetail, ServiceList, TargetKind, TimerDetail, TimerList, TimerRun,
 };
 use gargoyle_core::config::is_valid_unit_name;
 
@@ -38,7 +38,7 @@ const EVENTS_MAX: i64 = 500;
 /// `GET /timers/{unit}`: default and maximum `limit` (runs).
 const RUNS_LIMIT: i64 = 50;
 const RUNS_MAX: i64 = 500;
-/// Events in a service or timer detail, and in the overview.
+/// Events in a service, timer or check detail, and in the overview.
 const DETAIL_EVENTS: i64 = 50;
 const RECENT_EVENTS: i64 = 10;
 
@@ -51,6 +51,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/v1/services/{unit}", get(service))
         .route("/api/v1/timers", get(timers))
         .route("/api/v1/timers/{unit}", get(timer))
+        .route("/api/v1/checks", get(checks))
+        .route("/api/v1/checks/{name}", get(check))
         .route("/api/v1/events", get(events))
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/metrics/query", get(metrics_query))
@@ -180,6 +182,34 @@ async fn timer(
         host: s.host().to_owned(),
         timer: s.timer_view(&shared.config, cfg, now()),
         runs,
+        events,
+    });
+    Json(detail).into_response()
+}
+
+async fn checks(AxumState(shared): AxumState<Shared>) -> Json<CheckList> {
+    Json(shared.read(|s| CheckList {
+        host: s.host().to_owned(),
+        checks: s.checks_view(&shared.config, now()),
+    }))
+}
+
+/// `name` arrives percent-decoded (`Music%20HTTP` → `Music HTTP`) and is only compared against
+/// the configured names.
+async fn check(
+    AxumState(shared): AxumState<Shared>,
+    name: Result<Path<String>, PathRejection>,
+) -> Response {
+    let Ok(Path(name)) = name else {
+        return error(StatusCode::BAD_REQUEST, "bad_request", "invalid check name");
+    };
+    let Some(cfg) = shared.config.checks.iter().find(|c| c.name == name) else {
+        return error(StatusCode::NOT_FOUND, "not_found", "unknown check");
+    };
+    let events = events_or_empty(&shared, target_events(TargetKind::Check, &name)).await;
+    let detail = shared.read(|s| CheckDetail {
+        host: s.host().to_owned(),
+        check: s.check_view(cfg, now()),
         events,
     });
     Json(detail).into_response()
@@ -418,9 +448,12 @@ mod tests {
     use gargoyle_collector::MockCollector;
     use gargoyle_core::api::ServiceSummary;
     use gargoyle_core::config::Config;
+    use gargoyle_core::health::Health;
 
     use super::*;
     use crate::scheduler::{system_tick, unit_tick};
+
+    mod checks;
 
     const DEV_CONFIG: &str = include_str!("../../../config/gargoyle.dev.toml");
 
@@ -551,17 +584,15 @@ mod tests {
         let (_dir, router) = with_history().await;
         let (status, body) = get_json(router, "/api/v1/overview").await;
         assert_eq!(status, StatusCode::OK);
-        let mut ex = example("overview.json");
-        // Checks are M4.
-        assert_eq!(body["checks"], serde_json::json!([]));
-        ex["checks"] = serde_json::json!([]);
-        assert_same_shape(&body, &ex, "overview");
+        assert_same_shape(&body, &example("overview.json"), "overview");
         assert_eq!(body["host"], "gargoyle-mock");
         // It also parses as the DTO, as the frontend's types expect.
         let o = serde_json::from_value::<Overview>(body).unwrap();
         assert_eq!(o.timers.len(), 3);
         let total = o.counts.healthy + o.counts.warning + o.counts.critical + o.counts.unknown;
-        assert_eq!(total, 1 + 4 + 3, "system, services and timers");
+        assert_eq!(total, 1 + 4 + 3 + 2, "system, services, timers and checks");
+        // No probe has run in this test.
+        assert!(o.checks.iter().all(|c| c.health == Health::Unknown));
         // backup-fail.service is critical from its first observation.
         assert!(!o.recent_events.is_empty() && o.recent_events.len() <= 10);
         assert!(

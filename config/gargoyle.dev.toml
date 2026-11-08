@@ -42,3 +42,20 @@ unit = "backup.timer"
 [[timer]]
 unit = "demo-quick.timer"
 name = "Quick demo (alternates fail/success)"
+
+# Gargoyle probing its own liveness endpoint: healthy once the server is up.
+[[check]]
+name = "Gargoyle API"
+kind = "http"
+url = "http://127.0.0.1:9077/api/v1/health"
+interval = "15s"
+timeout = "2s"
+latency_warning = "500ms"
+
+# Nothing listens on this port: warning after the first failure, critical from the third.
+[[check]]
+name = "Closed port (demo)"
+kind = "tcp"
+address = "127.0.0.1:9"
+interval = "10s"
+timeout = "2s"

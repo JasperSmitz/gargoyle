@@ -437,3 +437,81 @@ fn debug_output_redacts_password_hash() {
     assert!(!debug.contains("argon2id"), "{debug}");
     assert!(debug.contains("<redacted>"));
 }
+
+#[test]
+fn check_targets_cannot_smuggle_credentials() {
+    let text = r#"
+[[check]]
+name = "a"
+kind = "tcp"
+address = "user:pass@host:25"
+
+[[check]]
+name = "b"
+kind = "http"
+url = "http://user:pa ss@host/"
+
+[[check]]
+name = "c"
+kind = "http"
+url = "http://user:pass@/x"
+"#;
+    assert_eq!(
+        error_paths(text),
+        ["check[0].address", "check[1].url", "check[2].url"]
+    );
+}
+
+#[test]
+fn check_display_target_and_debug_are_sanitized() {
+    let c = parse(
+        r#"
+[[check]]
+name = "web"
+kind = "http"
+url = "http://alice:s3cret@host/x?token=abc#frag"
+
+[[check]]
+name = "port"
+kind = "tcp"
+address = "127.0.0.1:25565"
+"#,
+    )
+    .unwrap();
+    // With userinfo, only the host is shown.
+    assert_eq!(c.checks[0].display_target(), "http://host");
+    assert_eq!(c.checks[1].display_target(), "127.0.0.1:25565");
+    let debug = format!("{c:?}");
+    for secret in ["alice", "s3cret", "token", "abc", "frag"] {
+        assert!(!debug.contains(secret), "{secret} in {debug}");
+    }
+    assert!(debug.contains("\"http://host\""), "{debug}");
+}
+
+#[test]
+fn ambiguous_userinfo_is_rejected_at_load() {
+    // Passwords with an unencoded `/`, `?`, `#` or `@`: the URL parser would end the userinfo
+    // (or the authority) inside the password.
+    for url in [
+        "http://admin:pa/ss@host/p",
+        "http://admin:12345/xyz@host/p",
+        "http://admin:pa?ss@host/p",
+        "http://admin:pa#ss@host/p",
+        "http://admin:p@ss@host/p",
+        "http://host/p?u=a@b",
+    ] {
+        let text = format!("[[check]]\nname = \"x\"\nkind = \"http\"\nurl = \"{url}\"\n");
+        let errors = errors(&text);
+        assert_eq!(errors.len(), 1, "{url}: {errors:?}");
+        assert_eq!(errors[0].path, "check[0].url", "{url}");
+        assert!(errors[0].message.contains("percent-encode"), "{url}");
+        // The error never echoes the URL.
+        assert!(!errors[0].message.contains("admin"), "{url}");
+    }
+    // Percent-encoded, the same credentials are fine.
+    let ok = parse(
+        "[[check]]\nname = \"x\"\nkind = \"http\"\nurl = \"http://admin:pa%2Fss%40x@host/p\"\n",
+    )
+    .unwrap();
+    assert_eq!(ok.checks[0].display_target(), "http://host");
+}

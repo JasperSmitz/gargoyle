@@ -9,14 +9,15 @@
 use std::collections::HashMap;
 
 use gargoyle_core::api::{
-    CpuSummary, DiskSummary, HostInfo as HostInfoDto, LoadSummary, MemorySummary, NetSummary,
-    Overview, ServiceSummary, SystemSummary, TargetKind, TempSummary, TimerSummary,
+    CheckSummary, CpuSummary, DiskSummary, HostInfo as HostInfoDto, LoadSummary, MemorySummary,
+    NetSummary, Overview, ServiceSummary, SystemSummary, TargetKind, TempSummary, TimerSummary,
 };
-use gargoyle_core::config::{Config, ServiceConfig, TimerConfig};
+use gargoyle_core::config::{CheckConfig, Config, ServiceConfig, TimerConfig};
 use gargoyle_core::health::{
-    self, Assessment, Health, RestartTracker, SystemHealth, TimerRuns, Transition, Transitions,
-    Window, disk_used_pct, evaluate_service, evaluate_system, evaluate_timer, is_stale,
-    load_per_core, memory_used_pct, run_of, service_is_running, service_run, timer_service,
+    self, Assessment, CheckTracker, Health, ProbeOutcome, RestartTracker, SystemHealth, TimerRuns,
+    Transition, Transitions, Window, disk_used_pct, evaluate_check, evaluate_service,
+    evaluate_system, evaluate_timer, is_stale, load_per_core, memory_used_pct, run_of,
+    service_is_running, service_run, timer_service,
 };
 use gargoyle_core::model::{HostInfo, SystemSnapshot, TimerRunRecord, UnitSnapshot};
 use gargoyle_core::rates::{CpuUsage, NetRate, system_rates};
@@ -34,6 +35,8 @@ pub struct State {
     host_info: Option<HostInfo>,
     system: SystemState,
     units: UnitState,
+    /// Per configured check name.
+    checks: HashMap<String, CheckTracker>,
     transitions: Transitions,
     /// Per timer: start of the newest run stored before this process started, from where journal
     /// backfill continues. Captured at restore, before live runs are stored.
@@ -48,9 +51,12 @@ struct SystemState {
     net: Vec<NetRate>,
     cpu_window: Window,
     load_window: Window,
-    /// Unix seconds of the last successful sample. A failed sample only gets logged: the system
-    /// summary has no message field, so failures show as `unknown` once this goes stale.
+    /// Unix seconds of the last successful sample. Failures show as `unknown` once this goes
+    /// stale.
     last_ok: Option<i64>,
+    /// The last collection error since the last successful sample. The system summary has no
+    /// message field, so it only reaches the messages of system events.
+    error: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -77,8 +83,10 @@ impl State {
                 cpu_window: Window::new(config.thresholds.cpu.window),
                 load_window: Window::new(config.thresholds.load.window),
                 last_ok: None,
+                error: None,
             },
             units: UnitState::default(),
+            checks: HashMap::new(),
             transitions: Transitions::default(),
             journal_since: HashMap::new(),
         }
@@ -93,6 +101,9 @@ impl State {
     ) {
         for (kind, target, health) in states {
             self.transitions.restore(kind, &target, health);
+            if kind == TargetKind::Check {
+                self.checks.insert(target, CheckTracker::restored(health));
+            }
         }
         for (timer, runs) in timers {
             if let Some(last) = &runs.last {
@@ -133,6 +144,19 @@ impl State {
 
         s.last_ok = Some(snap.ts);
         s.last = Some(snap);
+        s.error = None;
+    }
+
+    pub fn record_system_error(&mut self, error: String) {
+        self.system.error = Some(error);
+    }
+
+    /// Records the outcome of one probe of the check called `name`, finished at `ts`.
+    pub fn record_check(&mut self, name: &str, ts: i64, outcome: ProbeOutcome) {
+        self.checks
+            .entry(name.to_owned())
+            .or_default()
+            .record(ts, outcome);
     }
 
     /// Stores the unit snapshots of one successful unit tick at `now`.
@@ -256,7 +280,7 @@ impl State {
         let stale = is_stale(s.last_ok, now, config.collector.system_interval);
         let judged = |a: &Assessment| {
             if stale {
-                Assessment::unknown(stale_message(s.last_ok, None, now))
+                Assessment::unknown(stale_message(s.last_ok, s.error.as_deref(), now))
             } else {
                 a.clone()
             }
@@ -309,6 +333,15 @@ impl State {
         services.chain(timers).collect()
     }
 
+    /// The health of one check at `now`, for its transitions after each probe.
+    pub fn check_target(&self, cfg: &CheckConfig, now: i64) -> (TargetKind, String, Assessment) {
+        (
+            TargetKind::Check,
+            cfg.name.clone(),
+            self.check_assessment(cfg, now),
+        )
+    }
+
     /// The `host` field of every response.
     pub fn host(&self) -> &str {
         self.host_info
@@ -320,9 +353,11 @@ impl State {
         let system = self.system_view(config, now);
         let services = self.services_view(config, now);
         let timers = self.timers_view(config, now);
+        let checks = self.checks_view(config, now);
         let parts: Vec<Health> = std::iter::once(system.health)
             .chain(services.iter().map(|s| s.health))
             .chain(timers.iter().map(|t| t.health))
+            .chain(checks.iter().map(|c| c.health))
             .collect();
         Overview {
             host: self.host().to_owned(),
@@ -333,8 +368,8 @@ impl State {
             counts: health::tally(parts),
             services,
             timers,
-            // Checks are M4. Events come from storage; the HTTP handler adds them.
-            checks: Vec::new(),
+            checks,
+            // Events come from storage; the HTTP handler adds them.
             recent_events: Vec::new(),
         }
     }
@@ -440,6 +475,40 @@ impl State {
                 .and_then(|r| r.last.clone()),
             next_run: snap.and_then(|s| s.next_elapse_ts),
             running: self.timer_running(cfg),
+        }
+    }
+
+    pub fn checks_view(&self, config: &Config, now: i64) -> Vec<CheckSummary> {
+        config
+            .checks
+            .iter()
+            .map(|cfg| self.check_view(cfg, now))
+            .collect()
+    }
+
+    fn check_assessment(&self, cfg: &CheckConfig, now: i64) -> Assessment {
+        let empty = CheckTracker::default();
+        evaluate_check(cfg, self.checks.get(&cfg.name).unwrap_or(&empty), now)
+    }
+
+    pub fn check_view(&self, cfg: &CheckConfig, now: i64) -> CheckSummary {
+        let tracker = self.checks.get(&cfg.name);
+        let last = tracker.and_then(|t| t.last.as_ref());
+        let assessment = self.check_assessment(cfg, now);
+        CheckSummary {
+            name: cfg.name.clone(),
+            kind: cfg.kind,
+            target: cfg.display_target(),
+            health: assessment.health,
+            message: assessment.message,
+            last_check: last.map(|(ts, _)| *ts),
+            latency_ms: last
+                .and_then(|(_, o)| o.latency_ms())
+                .map(|ms| round(ms, 1)),
+            // A count seeded at restore is not shown before the first probe of this process.
+            consecutive_failures: tracker
+                .filter(|t| t.last.is_some())
+                .map_or(0, |t| t.consecutive_failures),
         }
     }
 

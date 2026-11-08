@@ -95,6 +95,9 @@ max_age = "26h"
 [[check]]
 name = "Music HTTP"
 # "http": GET the url; redirects are not followed and the body is discarded.
+# user:pass@ in the url is sent as basic auth; percent-encode '/', '?', '#' and '@' in them
+# (e.g. %40). The API and logs show the url without query string or fragment, and only
+# scheme://host[:port] when it has user:pass@. https trusts the built-in Mozilla roots only.
 kind = "http"
 url = "http://127.0.0.1:4533/ping"
 # Expected status code; default is any 2xx.
@@ -103,6 +106,7 @@ expect_status = 200
 interval = "60s"
 timeout = "5s"
 # Optional: warn when the probe is slower than this (must be > 0).
+# 1-2 consecutive failures are a warning, 3 or more critical.
 latency_warning = "1s"
 
 [[check]]

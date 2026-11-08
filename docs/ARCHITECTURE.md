@@ -66,7 +66,7 @@ unless one of these reasons applies.
 | CLI / logging | `clap` (derive), `tracing`, `tracing-subscriber` | Logs go to stderr, which journald captures |
 | Errors | `thiserror` (libraries), `anyhow` (binary) | |
 | Filesystem stats | `rustix` (`fs` feature, `statvfs`) | Avoids unsafe FFI |
-| HTTP checks | `reqwest` (`default-features = false`, `rustls-tls`) | Only for `[[check]]` probes |
+| HTTP checks | `reqwest` 0.12 (`default-features = false`, `rustls-tls`) | Only for `[[check]]` probes |
 | UI embedding | `rust-embed` | [ADR 0004](decisions/0004-embed-frontend-single-binary.md) |
 | Password hashing | `argon2` | [ADR 0005](decisions/0005-auth-and-exposure.md) |
 | Frontend | `svelte@5`, `vite`, `typescript`, `uplot` | [ADR 0001](decisions/0001-rust-backend-svelte-frontend.md) |
@@ -86,8 +86,12 @@ framework or state library.
 2. The **unit tick** runs every `collector.units_interval` (default 30s). The scheduler calls
    `collector.units(&configured)` once, which is one batched `systemctl show`. It then evaluates
    service and timer health. When it sees a new timer invocation, it inserts a `timer_runs` row.
-3. The **check ticks** run per check `interval` (default 60s). Each check is probed with its timeout.
-   Latency is stored as a series and health is evaluated.
+3. The **check ticks** run per check `interval` (default 60s), each check in its own loop whose
+   first probe is delayed by 1s plus a random jitter of up to `min(interval, 10s)`. Each check is
+   probed with its timeout (which validation keeps within the interval, so probes of one check
+   never overlap). Latency is stored as `check.latency:<name>` whenever the probe got an answer
+   (an HTTP response, even with the wrong status, or an accepted TCP connection). Health is then
+   evaluated and transitions of that check are logged.
 4. The **maintenance tick** runs every 5 minutes. It rolls up completed 5-minute buckets from
    `points_raw` into `points_5m`, then deletes rows past retention. Once a day it runs
    `PRAGMA optimize`.
@@ -96,6 +100,10 @@ framework or state library.
 
 If a collection fails, the error is logged and stored on the target as `message`. Targets whose last
 successful sample is older than 3× their interval become `unknown`, so data is never silently stale.
+The message of a stale target is the last collection error (`collection failed: ...`) or, without
+one, `no data for <n>s`. The system summary has no `message` field, so for system targets the
+error only reaches event messages. A failed check probe is a result, not a collection error; a
+check goes `unknown` only when no probe completed in 3× its interval (`no result for <n>s`).
 
 ## 4. Collector abstraction (`gargoyle-collector`)
 
@@ -362,8 +370,19 @@ the same shape as `lastRun` plus `"source": "observed" | "journal"`.
   "health": "healthy", "message": null, "lastCheck": 1794199980, "latencyMs": 3.1,
   "consecutiveFailures": 0 }
 ```
-The `target` field echoes the configured URL or address, with any userinfo and query string
-stripped.
+The `target` field echoes the configured URL or address, with any query string and fragment
+stripped. A URL with userinfo (`user:pass@`) is shown as `scheme://host[:port]` only, without its
+path. This happens in one place (`CheckConfig::display_target`, `config/target.rs`), which logs
+and `Debug` use too; the raw URL only ever goes to the HTTP client. If a URL contains an `@`
+anywhere, the display never shows anything before the last `@`, as a backstop to validation (§7). `latencyMs` is that of the last probe if it got an
+answer (rounded to 0.1 ms), else `null`. `lastCheck` is when the last probe finished.
+`consecutiveFailures` counts failures since the last success; it is `0` before the first probe of
+the process. At startup, a check whose last logged state was critical has its count seeded at 3,
+because the count is not stored: if the target is still down, the first probe stays critical
+instead of logging a spurious critical → warning → critical pair (so the count may include
+failures from before the restart). Failure
+messages read `<reason> (<n> consecutive failure[s])`, e.g. `connection refused`, `timed out after
+5s` or `unexpected status 500 (expected 2xx)`; a slow success reads `slow: 1200 ms (warning ≥ 1s)`.
 
 **Event**
 ```json
@@ -376,7 +395,10 @@ timers use the unit name. Transition rules (`core::health::Transitions`):
 
 - **Hold-down:** a new state is logged only after it has been observed on 2 consecutive
   evaluations (system tick for system targets, unit tick for services and timers). A value
-  flapping across a threshold every tick therefore logs nothing. The event's `ts` and `message` are
+  flapping across a threshold every tick therefore logs nothing. **Checks have no hold-down:**
+  their consecutive-failure rule (§8) already debounces, and a probe interval can be long, so a
+  check's state is logged on the probe that first shows it (warning at failure 1, critical at
+  failure 3). The event's `ts` and `message` are
   from the confirming evaluation. Live health in every other endpoint is not delayed.
 - A target's first state is logged (with `from: null`) only if it is not healthy, and `unknown` is
   never a first state (CPU is unknown for one tick after every start).
@@ -431,8 +453,9 @@ other parameters. That cursor is exclusive, so a page never ends part-way throug
 - if the first `limit` events all share one second, that whole second is returned, so a page may
   hold **more** than `limit` events (at most one per target).
 
-The end of the list is an **empty page**, not a short one. `GET /api/v1/timers/{unit}` takes `limit` for runs (default 50, max 500). Service and
-timer details include that target's newest 50 events. The overview includes the newest 10.
+The end of the list is an **empty page**, not a short one. `GET /api/v1/timers/{unit}` takes `limit` for runs (default 50, max 500). Service, timer and
+check details include that target's newest 50 events. `{name}` in `/checks/{name}` is
+percent-decoded (`Music%20HTTP`); an unknown name is a 404. The overview includes the newest 10.
 
 **Static UI.** `/` serves `index.html` with `Cache-Control: no-cache`. Paths under `/assets/`
 (Vite's content-hashed output) are served with `Cache-Control: immutable`; any other embedded file
@@ -522,6 +545,14 @@ Validation rules:
 
 - Unit names must match the systemd naming regex (§4).
 - Check names must be unique.
+- A check `url` must start with `http://` or `https://` and contain no whitespace, control
+  characters or `\`. It may contain at most one `@`, which must end the userinfo; an `@` in the
+  path, query or fragment is rejected. The part after the userinfo must be `host[:port]` (letters,
+  digits, `-`, `.`, `_`, or a bracketed IPv6 address; a numeric port). Together these reject every
+  URL whose userinfo is ambiguous, such as a password with an unencoded `/`, `?`, `#` or `@`,
+  where the URL parser would end the userinfo inside the password and display it as host or path.
+  Such characters must be percent-encoded (`%2F`, `%3F`, `%23`, `%40`). The error message never
+  echoes the URL. A check `address` is `host:port` with no `@`, `/` or whitespace in the host.
 - `warning < critical`.
 - Intervals must be at least `1s`. `raw_retention` must be at least `10m`, and not exceed
   `rollup_retention`.
@@ -539,7 +570,7 @@ worst of its parts in this order.
 | Service (`expect = active`) | ActiveState = active | as above | failed or inactive | as above |
 | Service (`expect = any`) | not failed | — | failed | as above |
 | Timer | timer active and last run `Result=success` (or currently running: the result is not judged while running, but `max_age` still is) | timer not active (stopped/disabled); last success older than `max_age`; `NextElapse` > 10 min in the past | last run result ≠ success | never run; stale |
-| Check | success and latency < `latency_warning` | 1–2 consecutive failures; slow | ≥ 3 consecutive failures | not yet run |
+| Check | success and latency < `latency_warning` | 1–2 consecutive failures; slow | ≥ 3 consecutive failures | not yet run; no probe completed within 3× interval |
 
 - **Windowed metrics.** CPU and load are evaluated on the mean over `window`. The values are kept in
   a small ring buffer in `State`, not queried from the DB. All other metrics are evaluated on the
@@ -574,7 +605,10 @@ worst of its parts in this order.
 4. **No secrets in responses.**
    - Only whitelisted systemd properties are fetched. `ExecStart`, `Environment`, `EnvironmentFiles`
      and similar are **never** fetched.
-   - Check URLs are echoed with userinfo and query stripped.
+   - Check URLs are echoed without query and fragment, and without anything but
+     `scheme://host[:port]` when they have userinfo (§6); logs and the config's `Debug` output
+     use the same function. URLs with ambiguous userinfo are rejected at load (§7). Probe failure reasons are built from the error
+     kind, never from the client's error text, which contains the URL.
    - Config values such as the password hash and paths are never serialized into the API.
    - Error messages returned to clients are generic. Details go only to the log.
 5. **Headers.**
@@ -588,7 +622,8 @@ worst of its parts in this order.
      `NoNewPrivileges=yes`, `StateDirectory=gargoyle`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`,
      `CapabilityBoundingSet=` (empty), `SystemCallFilter=@system-service`.
 7. **Outbound probes.** Checks only reach targets written in the config file by the admin. They
-   never follow redirects and never store response bodies.
+   never follow redirects, never read or store response bodies, ignore proxy settings from the
+   environment (so credentials in a URL go only to the target) and do not reuse connections.
 
 ## 10. Multi-machine path (design only — do not build yet)
 

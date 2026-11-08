@@ -13,6 +13,7 @@ axum.workspace = true
 clap.workspace = true
 gargoyle-collector.workspace = true
 gargoyle-core.workspace = true
+reqwest.workspace = true
 rusqlite.workspace = true
 rust-embed.workspace = true
 serde.workspace = true
