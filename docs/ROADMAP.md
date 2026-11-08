@@ -19,8 +19,8 @@ the same change.
 | M0 Foundation | ✅ Done (2026-11-08) |
 | M1 Live dashboard | ✅ Done (2026-11-08) |
 | M2 History & charts | ✅ Done (2026-11-08) |
-| M3 Timers & events | 🚧 In progress |
-| M4 Checks & health polish | Planned |
+| M3 Timers & events | ✅ Done (2026-11-08) |
+| M4 Checks & health polish | 🚧 In progress |
 | M5 Security hardening | Planned |
 | M6 Packaging & docs | Planned |
 
@@ -177,14 +177,14 @@ each other.
 
 **Acceptance**
 
-- [ ] In mock mode, a timer shows a failed run as `critical` with the exit status. After the next
+- [x] In mock mode, a timer shows a failed run as `critical` with the exit status. After the next
       successful run it returns to `healthy`, and both transitions appear in `/events`.
-- [ ] Inactive services triggered by timers never count against the timer's health.
-- [ ] On the dev box, a real user-created test timer, run with `systemctl --user` or a system timer
+- [x] Inactive services triggered by timers never count against the timer's health.
+- [x] On the dev box, a real user-created test timer, run with `systemctl --user` or a system timer
       the developer creates locally, shows correct last and next run. (Gargoyle itself creates
       nothing.)
-- [ ] Restarting gargoyle does not create duplicate `timer_runs` rows (unique constraint test).
-- [ ] The events page paginates (`until` cursor) and filters by target.
+- [x] Restarting gargoyle does not create duplicate `timer_runs` rows (unique constraint test).
+- [x] The events page paginates (`until` cursor) and filters by target.
 
 ---
 
