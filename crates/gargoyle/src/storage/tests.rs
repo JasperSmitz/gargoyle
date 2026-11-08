@@ -279,7 +279,7 @@ async fn query_resolution_buckets_and_keys() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, QueryError::BadRequest(ref e) if e.0.contains("nope")),
+        matches!(err, QueryError::UnknownSeries(ref k) if k == "nope"),
         "{err:?}"
     );
     let (_, series) = s
@@ -526,6 +526,7 @@ async fn step_floor_follows_the_slowest_queried_series() {
     s.append(vec![
         sample("cpu.usage", NOW - 10, 1.0),
         sample("service.memory:a.service", NOW - 30, 2.0),
+        sample("service.restarts:a.service", NOW - 30, 0.0),
         sample("check.latency:web", NOW - 60, 3.0),
     ])
     .await
@@ -542,5 +543,6 @@ async fn step_floor_follows_the_slowest_queried_series() {
     };
     assert_eq!(step(&["cpu.usage"]).await, 10);
     assert_eq!(step(&["cpu.usage", "service.memory:*"]).await, 30);
+    assert_eq!(step(&["cpu.usage", "service.restarts:a.service"]).await, 30);
     assert_eq!(step(&["check.latency:web"]).await, 60);
 }

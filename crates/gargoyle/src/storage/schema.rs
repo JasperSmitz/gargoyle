@@ -33,6 +33,10 @@ const MIGRATIONS: &[&str] = &[
                               source TEXT NOT NULL,
                               UNIQUE(host_id, service, started_at));
      CREATE INDEX timer_runs_ts ON timer_runs(host_id, timer, started_at);",
+    // 2: one row per invocation. The journal and systemd can disagree on a run's start by about
+    // a second, so (service, started_at) alone does not catch the same run from both sources.
+    "CREATE UNIQUE INDEX timer_runs_invocation ON timer_runs(host_id, service, invocation_id)
+       WHERE invocation_id IS NOT NULL;",
 ];
 
 /// Opens the writer connection: applies pragmas and pending migrations.
@@ -130,6 +134,45 @@ mod tests {
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
             .unwrap();
         assert!(fk);
+    }
+
+    #[test]
+    fn upgrades_a_populated_v1_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute_batch(
+                "INSERT INTO hosts (id, name) VALUES (1, 'local');
+                 INSERT INTO series (id, host_id, key, unit) VALUES (1, 1, 'cpu.usage', 'percent');
+                 INSERT INTO points_raw VALUES (1, 100, 1.5);
+                 INSERT INTO events (host_id, ts, target_kind, target, from_state, to_state)
+                   VALUES (1, 100, 'system', 'cpu', NULL, 'warning');
+                 INSERT INTO timer_runs (host_id, timer, service, invocation_id, started_at, source)
+                   VALUES (1, 't.timer', 't.service', 'a', 100, 'observed'),
+                          (1, 't.timer', 't.service', NULL, 200, 'journal'),
+                          (1, 't.timer', 't.service', NULL, 300, 'journal');",
+            )
+            .unwrap();
+        }
+        let conn = open_writer(&path).unwrap();
+        let v: usize = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 2);
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT count(*) FROM points_raw"), 1);
+        assert_eq!(count("SELECT count(*) FROM events"), 1);
+        assert_eq!(count("SELECT count(*) FROM timer_runs"), 3);
+        // The new index is in force; several NULL invocations stay allowed.
+        let dup = conn.execute(
+            "INSERT INTO timer_runs (host_id, timer, service, invocation_id, started_at, source)
+             VALUES (1, 't.timer', 't.service', 'a', 999, 'journal')",
+            [],
+        );
+        assert!(dup.is_err());
     }
 
     #[test]

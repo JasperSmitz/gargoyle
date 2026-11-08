@@ -1,4 +1,9 @@
-//! Periodic work (ARCHITECTURE §3): the system tick, the unit tick and the maintenance tick.
+//! Periodic work (ARCHITECTURE §3): the system tick, the unit tick and the maintenance tick, plus
+//! the one-off startup work: restoring state from storage and journal backfill.
+//!
+//! After each system or unit tick, the targets it covers are judged and every health transition
+//! is stored as an event (see `gargoyle_core::health::Transitions` for the rules). The unit tick
+//! also stores new and finished timer runs.
 //!
 //! Collector calls block (they read `/proc` or spawn `systemctl`), so each runs in
 //! `spawn_blocking`. A failed collection is logged and recorded; it never stops the loop.
@@ -16,8 +21,10 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gargoyle_collector::{CollectError, Collector};
+use gargoyle_core::api::RunSource;
 use gargoyle_core::config::Config;
-use gargoyle_core::model::UnitRequest;
+use gargoyle_core::health::Transition;
+use gargoyle_core::model::{TimerRunRecord, UnitRequest};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
@@ -26,6 +33,9 @@ use crate::storage::{Sample, Storage, samples};
 
 /// How often rollup and retention run (§3).
 pub const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(300);
+
+/// The longest one timer's journal backfill (one `journalctl` run) is awaited.
+const JOURNAL_LIMIT: Duration = Duration::from_secs(60);
 
 /// Everything the scheduler and the HTTP handlers share.
 #[derive(Clone)]
@@ -36,11 +46,17 @@ pub struct Shared {
     /// `None` only in tests that do not need history.
     pub storage: Option<Storage>,
     /// Set while writes fail, so a broken disk logs one warning instead of one per tick.
-    storage_failing: Arc<AtomicBool>,
+    storage_failing: Arc<StorageFailing>,
     /// Host info has its own flag, so a hung host-info read never costs a system sample.
     host_busy: Busy,
     system_busy: Busy,
     units_busy: Busy,
+    journal_busy: Busy,
+    /// How long one `timer_history` call is awaited; [`JOURNAL_LIMIT`] except in tests.
+    journal_limit: Duration,
+    /// Set once journal backfill has been started, after the first successful unit tick (which
+    /// tells each timer's service, from its `Unit=` property).
+    journal_started: Arc<AtomicBool>,
     /// Host info is retried every system tick until it works; only the first failure is a warning.
     host_info_warned: Arc<AtomicBool>,
 }
@@ -57,6 +73,9 @@ impl Shared {
             host_busy: Busy::default(),
             system_busy: Busy::default(),
             units_busy: Busy::default(),
+            journal_busy: Busy::default(),
+            journal_limit: JOURNAL_LIMIT,
+            journal_started: Arc::default(),
             host_info_warned: Arc::default(),
         }
     }
@@ -77,6 +96,25 @@ impl Shared {
         let guard = self.state.read().unwrap_or_else(PoisonError::into_inner);
         f(&guard)
     }
+}
+
+/// Restores what storage knows from before this process (the last logged state of every target,
+/// each timer's newest run and success) into `State`. Call before [`spawn`], so the first ticks
+/// compare against it.
+pub async fn restore(shared: &Shared) -> anyhow::Result<()> {
+    let Some(storage) = &shared.storage else {
+        return Ok(());
+    };
+    let states = storage.last_states().await?;
+    let timers = shared
+        .config
+        .timers
+        .iter()
+        .map(|t| t.unit.clone())
+        .collect();
+    let timers = storage.timer_summaries(timers).await?;
+    shared.write(|s| s.restore(states, timers));
+    Ok(())
 }
 
 /// Starts the system, unit and (with storage) maintenance loops. Each ticks immediately, then
@@ -146,15 +184,25 @@ pub async fn system_tick(shared: Shared) {
         // sample is stale.
         Err(e) => tracing::warn!(error = %e, "system collection failed"),
     }
+    let now = now();
+    let events = shared.write(|s| {
+        let targets = s.system_targets(&shared.config, now);
+        s.transitions(targets)
+    });
+    store_events(&shared, now, events).await;
 }
 
-/// One batched poll of every configured unit.
+/// One batched poll of every configured service and timer.
 pub async fn unit_tick(shared: Shared) {
-    let requests: Vec<UnitRequest> = shared
-        .config
+    let config = &shared.config;
+    let requests: Vec<UnitRequest> = config
         .services
         .iter()
         .map(|s| UnitRequest::new(&s.unit))
+        .chain(config.timers.iter().map(|t| UnitRequest {
+            unit: t.unit.clone(),
+            service: t.service.clone(),
+        }))
         .collect();
     if requests.is_empty() {
         return;
@@ -168,38 +216,159 @@ pub async fn unit_tick(shared: Shared) {
     {
         Ok(units) => {
             let now = now();
-            let config = &shared.config;
             let samples = samples::services(now, &units, |unit| {
                 config.services.iter().any(|s| s.unit == unit)
             });
-            shared.write(|s| s.record_units(now, units));
+            let runs = shared.write(|s| {
+                s.record_units(now, units);
+                s.observe_timer_runs(config)
+            });
             store(&shared, samples).await;
+            store_runs(&shared, runs).await;
+            if config.collector.journal_backfill
+                && shared.storage.is_some()
+                && !config.timers.is_empty()
+                && !shared.journal_started.swap(true, Ordering::Relaxed)
+            {
+                tokio::spawn(backfill_journal(shared.clone()));
+            }
         }
         Err(e) => {
             tracing::warn!(error = %e, "unit collection failed");
             shared.write(|s| s.record_units_error(e.to_string()));
         }
     }
+    let now = now();
+    let events = shared.write(|s| {
+        let targets = s.unit_targets(config, now);
+        s.transitions(targets)
+    });
+    store_events(&shared, now, events).await;
 }
 
-/// Appends points to history. Failures are logged (once until the next success), never fatal.
+/// Imports past runs of every configured timer from the journal (M3.4), from the newest run
+/// stored before startup, or 30 days back. Runs one timer at a time; an error is logged (one
+/// warning, the rest at debug) and the next timer is tried, while a timeout stops the backfill.
+/// Collectors without journal access return no runs.
+pub async fn backfill_journal(shared: Shared) {
+    let Some(storage) = shared.storage.clone() else {
+        return;
+    };
+    let requests = shared.read(|s| s.journal_requests(&shared.config, now()));
+    // Usually the same cause (e.g. no journal access) for every timer: warn once.
+    let mut warned = false;
+    for (timer, service, since) in requests {
+        let collector = shared.collector.clone();
+        let (t, svc) = (timer.clone(), service.clone());
+        let records = match call(&shared.journal_busy, shared.journal_limit, move || {
+            collector.timer_history(&t, &svc, since)
+        })
+        .await
+        {
+            Ok(records) => records,
+            // The hung `journalctl` keeps the busy flag set, so every further timer would fail
+            // the same way: stop with one warning.
+            Err(e @ (CallError::TimedOut(_) | CallError::Busy(_))) => {
+                tracing::warn!(%timer, error = %e, "journal backfill stopped");
+                return;
+            }
+            Err(e) => {
+                if warned {
+                    tracing::debug!(%timer, error = %e, "journal backfill failed");
+                } else {
+                    tracing::warn!(%timer, error = %e, "journal backfill failed");
+                    warned = true;
+                }
+                continue;
+            }
+        };
+        if records.is_empty() {
+            continue;
+        }
+        // Stored under the configured timer name, whatever the collector called it.
+        let records: Vec<TimerRunRecord> = records
+            .into_iter()
+            .map(|r| TimerRunRecord {
+                timer: timer.clone(),
+                ..r
+            })
+            .collect();
+        tracing::info!(%timer, runs = records.len(), "imported timer runs from the journal");
+        shared.write(|s| s.record_journal_runs(&timer, &records));
+        if let Err(e) = storage.upsert_runs(records, RunSource::Journal).await {
+            tracing::warn!(%timer, error = format!("{e:#}"), "cannot store journal runs");
+        }
+    }
+}
+
+/// Stores observed timer runs. If that fails, they are handed out again on the next tick.
+async fn store_runs(shared: &Shared, runs: Vec<TimerRunRecord>) {
+    let Some(storage) = &shared.storage else {
+        return;
+    };
+    let result = storage.upsert_runs(runs, RunSource::Observed).await;
+    if !report_storage(&shared.storage_failing.runs, "timer runs", result) {
+        shared.write(State::forget_written_runs);
+    }
+}
+
+/// Stores health transitions. A failed write loses those events (the live state is unaffected).
+async fn store_events(shared: &Shared, ts: i64, events: Vec<Transition>) {
+    for e in &events {
+        tracing::info!(
+            target_kind = ?e.kind,
+            target = %e.target,
+            from = e.from.map(|h| h.as_str()),
+            to = %e.to,
+            message = e.message.as_deref(),
+            "health changed"
+        );
+    }
+    let Some(storage) = &shared.storage else {
+        return;
+    };
+    let result = storage.insert_events(ts, events).await;
+    report_storage(&shared.storage_failing.events, "events", result);
+}
+
+/// Appends points to history.
 async fn store(shared: &Shared, samples: Vec<Sample>) {
     let Some(storage) = &shared.storage else {
         return;
     };
-    match storage.append(samples).await {
+    let result = storage.append(samples).await;
+    report_storage(&shared.storage_failing.points, "history", result);
+}
+
+/// One flag per kind of write, so one kind failing while another works does not flap the logs.
+#[derive(Default)]
+struct StorageFailing {
+    points: AtomicBool,
+    runs: AtomicBool,
+    events: AtomicBool,
+}
+
+/// Logs a failed write of `what` (once until the next success); never fatal. Returns whether
+/// it worked.
+fn report_storage(failing: &AtomicBool, what: &str, result: anyhow::Result<()>) -> bool {
+    match result {
         Ok(()) => {
-            if shared.storage_failing.swap(false, Ordering::Relaxed) {
-                tracing::info!("storing history works again");
+            if failing.swap(false, Ordering::Relaxed) {
+                tracing::info!("storing {what} works again");
             }
+            true
         }
-        Err(e) if !shared.storage_failing.swap(true, Ordering::Relaxed) => {
-            tracing::warn!(
-                error = format!("{e:#}"),
-                "cannot store history; live data is unaffected"
-            );
+        Err(e) => {
+            if failing.swap(true, Ordering::Relaxed) {
+                tracing::debug!(error = format!("{e:#}"), "cannot store {what}");
+            } else {
+                tracing::warn!(
+                    error = format!("{e:#}"),
+                    "cannot store {what}; live data is unaffected"
+                );
+            }
+            false
         }
-        Err(e) => tracing::debug!(error = format!("{e:#}"), "cannot store history"),
     }
 }
 
@@ -294,6 +463,7 @@ mod tests {
     use gargoyle_core::model::{HostInfo, SystemSnapshot, UnitSnapshot};
 
     use super::*;
+    use crate::storage::Storage;
 
     fn config() -> Config {
         Config::from_toml_str(
@@ -512,9 +682,13 @@ mod tests {
         assert!(keys.contains(&"mem.used".to_owned()), "{keys:?}");
         assert!(keys.contains(&"load.15".to_owned()), "{keys:?}");
         assert!(!keys.iter().any(|k| k.starts_with("cpu.")), "{keys:?}");
-        // backup-fail.service is failed, so it has no memory.
+        // backup-fail.service is failed, so it has no memory, but it reports NRestarts.
         assert!(
             !keys.iter().any(|k| k.starts_with("service.memory:")),
+            "{keys:?}"
+        );
+        assert!(
+            keys.contains(&"service.restarts:backup-fail.service".to_owned()),
             "{keys:?}"
         );
         maintenance_tick(shared.clone()).await;
@@ -528,11 +702,466 @@ mod tests {
         let conn = rusqlite::Connection::open(dir.path().join("g.db")).unwrap();
         conn.execute_batch("DROP TABLE points_raw").unwrap();
         system_tick(shared.clone()).await;
-        assert!(shared.storage_failing.load(Ordering::Relaxed));
+        assert!(shared.storage_failing.points.load(Ordering::Relaxed));
         system_tick(shared.clone()).await;
         let o = shared.read(|s| s.overview(&shared.config, now()));
         assert_eq!(o.system.disks.len(), 2);
         assert!(o.system.ts > 0, "the sample was recorded");
         maintenance_tick(shared.clone()).await;
+    }
+
+    /// Units come from a script the test edits between ticks; system samples from the mock.
+    #[derive(Default)]
+    struct Scripted {
+        units: std::sync::Mutex<Vec<UnitSnapshot>>,
+        history: std::sync::Mutex<Vec<TimerRunRecord>>,
+        /// `(timer, service, since)` of every `timer_history` call.
+        history_calls: std::sync::Mutex<Vec<(String, String, i64)>>,
+    }
+
+    impl Scripted {
+        fn set_service(&self, svc: UnitSnapshot) {
+            let mut units = self.units.lock().unwrap();
+            units.retain(|u| u.unit != svc.unit);
+            units.push(svc);
+        }
+    }
+
+    impl Collector for Scripted {
+        fn host_info(&self) -> Result<HostInfo, CollectError> {
+            MockCollector::new(1).host_info()
+        }
+        fn system_snapshot(&self) -> Result<SystemSnapshot, CollectError> {
+            Err(err())
+        }
+        fn units(&self, _: &[UnitRequest]) -> Result<Vec<UnitSnapshot>, CollectError> {
+            Ok(self.units.lock().unwrap().clone())
+        }
+        fn timer_history(
+            &self,
+            timer: &str,
+            service: &str,
+            since: i64,
+        ) -> Result<Vec<TimerRunRecord>, CollectError> {
+            self.history_calls
+                .lock()
+                .unwrap()
+                .push((timer.into(), service.into(), since));
+            Ok(self.history.lock().unwrap().clone())
+        }
+    }
+
+    fn unit(name: &str, active: &str, sub: &str) -> UnitSnapshot {
+        UnitSnapshot {
+            unit: name.into(),
+            load_state: "loaded".into(),
+            active_state: active.into(),
+            sub_state: sub.into(),
+            description: String::new(),
+            active_enter_ts: None,
+            n_restarts: Some(0),
+            result: Some("success".into()),
+            exec_main_status: Some(0),
+            exec_main_start_ts: None,
+            exec_main_exit_ts: None,
+            invocation_id: None,
+            memory_current: None,
+            last_trigger_ts: None,
+            next_elapse_ts: None,
+            trigger_unit: None,
+        }
+    }
+
+    /// `sync.timer` triggers `sync-job.service` (via `Unit=`, not the default name).
+    fn timer_unit() -> UnitSnapshot {
+        UnitSnapshot {
+            next_elapse_ts: Some(now() + 3600),
+            trigger_unit: Some("sync-job.service".into()),
+            ..unit("sync.timer", "active", "waiting")
+        }
+    }
+
+    fn running(start: i64, id: &str) -> UnitSnapshot {
+        UnitSnapshot {
+            exec_main_start_ts: Some(start),
+            invocation_id: Some(id.into()),
+            ..unit("sync-job.service", "activating", "start")
+        }
+    }
+
+    fn finished(start: i64, id: &str, status: i32) -> UnitSnapshot {
+        let (active, result) = if status == 0 {
+            ("inactive", "success")
+        } else {
+            ("failed", "exit-code")
+        };
+        UnitSnapshot {
+            exec_main_start_ts: Some(start),
+            exec_main_exit_ts: Some(start + 30),
+            invocation_id: Some(id.into()),
+            result: Some(result.into()),
+            exec_main_status: Some(status),
+            ..unit(
+                "sync-job.service",
+                active,
+                if status == 0 { "dead" } else { "failed" },
+            )
+        }
+    }
+
+    fn timer_config(dir: &tempfile::TempDir, journal: bool) -> Config {
+        let mut config = Config::from_toml_str(&format!(
+            "[collector]\nmode = \"mock\"\njournal_backfill = {journal}\n\
+             [[timer]]\nunit = \"sync.timer\"\n"
+        ))
+        .expect("valid");
+        config.storage.path = dir.path().join("g.db");
+        config
+    }
+
+    /// A process over the database in `dir`, restored from it as at startup.
+    async fn start(dir: &tempfile::TempDir, collector: Arc<Scripted>, journal: bool) -> Shared {
+        let config = timer_config(dir, journal);
+        let storage = Storage::open(&config.storage).unwrap();
+        let shared = Shared::new(config, collector).with_storage(storage);
+        restore(&shared).await.unwrap();
+        shared
+    }
+
+    /// `(started_at, finished_at, result, exit_status, source)` of every stored run, oldest first.
+    type RunRow = (i64, Option<i64>, Option<String>, Option<i32>, String);
+
+    fn stored_runs(dir: &tempfile::TempDir) -> Vec<RunRow> {
+        let conn = rusqlite::Connection::open(dir.path().join("g.db")).unwrap();
+        conn.prepare(
+            "SELECT started_at, finished_at, result, exit_status, source FROM timer_runs
+             WHERE timer = 'sync.timer' AND service = 'sync-job.service' ORDER BY started_at",
+        )
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// `(target, from, to)` of every stored event, oldest first.
+    fn stored_events(dir: &tempfile::TempDir) -> Vec<(String, Option<String>, String)> {
+        let conn = rusqlite::Connection::open(dir.path().join("g.db")).unwrap();
+        conn.prepare("SELECT target, from_state, to_state FROM events ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    fn timer_health(shared: &Shared) -> (Health, Option<String>) {
+        let t = shared.read(|s| s.timers_view(&shared.config, now())[0].clone());
+        (t.health, t.message)
+    }
+
+    #[tokio::test]
+    async fn timer_runs_are_detected_completed_and_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = Arc::new(Scripted::default());
+        let t0 = now() - 7200;
+        script.units.lock().unwrap().push(timer_unit());
+
+        let shared = start(&dir, script.clone(), false).await;
+        // Never run since boot: no run, timer unknown.
+        script.set_service(unit("sync-job.service", "inactive", "dead"));
+        unit_tick(shared.clone()).await;
+        assert!(stored_runs(&dir).is_empty());
+        assert_eq!(
+            timer_health(&shared),
+            (Health::Unknown, Some("never run".into()))
+        );
+
+        // A run starts: stored without an end; the timer is healthy while it runs.
+        script.set_service(running(t0, "aaa"));
+        unit_tick(shared.clone()).await;
+        unit_tick(shared.clone()).await;
+        assert_eq!(
+            stored_runs(&dir),
+            [(t0, None, None, None, "observed".into())]
+        );
+        assert_eq!(timer_health(&shared).0, Health::Healthy);
+        assert!(shared.read(|s| s.timers_view(&shared.config, now())[0].running));
+
+        // It fails: the same row is completed.
+        script.set_service(finished(t0, "aaa", 1));
+        unit_tick(shared.clone()).await;
+        let failed = (
+            t0,
+            Some(t0 + 30),
+            Some("exit-code".into()),
+            Some(1),
+            "observed".into(),
+        );
+        assert_eq!(stored_runs(&dir), std::slice::from_ref(&failed));
+        assert_eq!(
+            timer_health(&shared),
+            (
+                Health::Critical,
+                Some("last run failed: exit-code (status 1)".into())
+            )
+        );
+
+        // Restart: the same snapshot again inserts nothing new, and the stored run is the
+        // timer's last run before the first tick.
+        drop(shared);
+        let shared = start(&dir, script.clone(), false).await;
+        let last = shared.read(|s| s.timers_view(&shared.config, now())[0].last_run.clone());
+        assert_eq!(last.map(|r| r.started_at), Some(t0));
+        unit_tick(shared.clone()).await;
+        assert_eq!(stored_runs(&dir), std::slice::from_ref(&failed));
+
+        // A new invocation is a new row; it succeeds.
+        script.set_service(running(t0 + 3600, "bbb"));
+        unit_tick(shared.clone()).await;
+        script.set_service(finished(t0 + 3600, "bbb", 0));
+        unit_tick(shared.clone()).await;
+        assert_eq!(
+            stored_runs(&dir),
+            [
+                failed,
+                (
+                    t0 + 3600,
+                    Some(t0 + 3630),
+                    Some("success".into()),
+                    Some(0),
+                    "observed".into()
+                )
+            ]
+        );
+        assert_eq!(timer_health(&shared), (Health::Healthy, None));
+    }
+
+    #[tokio::test]
+    async fn timer_failure_and_recovery_are_events_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = Arc::new(Scripted::default());
+        let t0 = now() - 7200;
+        script.units.lock().unwrap().push(timer_unit());
+        script.set_service(finished(t0, "aaa", 0));
+
+        let shared = start(&dir, script.clone(), false).await;
+        unit_tick(shared.clone()).await;
+        // Healthy at first sight: nothing logged.
+        assert!(stored_events(&dir).is_empty());
+
+        script.set_service(finished(t0 + 3600, "bbb", 1));
+        unit_tick(shared.clone()).await;
+        unit_tick(shared.clone()).await;
+        let to_critical = (
+            "sync.timer".to_owned(),
+            Some("healthy".to_owned()),
+            "critical".to_owned(),
+        );
+        assert_eq!(stored_events(&dir), std::slice::from_ref(&to_critical));
+
+        // A restart does not log the critical state again.
+        drop(shared);
+        let shared = start(&dir, script.clone(), false).await;
+        unit_tick(shared.clone()).await;
+        assert_eq!(stored_events(&dir), std::slice::from_ref(&to_critical));
+
+        script.set_service(finished(t0 + 7200, "ccc", 0));
+        unit_tick(shared.clone()).await;
+        // Held down until seen twice.
+        assert_eq!(stored_events(&dir).len(), 1);
+        unit_tick(shared.clone()).await;
+        let events = stored_events(&dir);
+        assert_eq!(
+            events,
+            [
+                to_critical,
+                (
+                    "sync.timer".to_owned(),
+                    Some("critical".to_owned()),
+                    "healthy".to_owned()
+                )
+            ]
+        );
+        let detail = shared
+            .storage
+            .as_ref()
+            .unwrap()
+            .events(crate::storage::EventFilter {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            detail[1].message.as_deref(),
+            Some("last run failed: exit-code (status 1)")
+        );
+        assert_eq!(detail[0].message, None);
+    }
+
+    #[tokio::test]
+    async fn failing_unit_collection_logs_unknown_after_staleness() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = timer_config(&dir, false);
+        config.services.push(
+            Config::from_toml_str("[[service]]\nunit = \"backup-fail.service\"\n")
+                .unwrap()
+                .services
+                .remove(0),
+        );
+        let storage = Storage::open(&config.storage).unwrap();
+        let shared = Shared::new(config, Arc::new(MockCollector::new(1))).with_storage(storage);
+        unit_tick(shared.clone()).await;
+        assert!(stored_events(&dir).is_empty(), "held down");
+        unit_tick(shared.clone()).await;
+        let first = stored_events(&dir);
+        assert!(first.contains(&("backup-fail.service".into(), None, "critical".into())));
+        // Pretend the last good tick was long ago and collection now fails.
+        shared.write(|s| {
+            s.record_units(now() - 3600, Vec::new());
+            s.record_units_error("systemctl failed: boom".into());
+        });
+        let evaluate = || {
+            shared.write(|s| {
+                let targets = s.unit_targets(&shared.config, now());
+                s.transitions(targets)
+            })
+        };
+        assert!(evaluate().is_empty(), "held down");
+        let events = evaluate();
+        assert!(events.iter().all(|e| e.to == Health::Unknown), "{events:?}");
+        assert!(events.iter().any(|e| e.target == "backup-fail.service"
+            && e.from == Some(Health::Critical)
+            && e.message.as_deref() == Some("collection failed: systemctl failed: boom")));
+    }
+
+    #[tokio::test]
+    async fn journal_backfill_imports_runs_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = Arc::new(Scripted::default());
+        let t0 = now() - 86_400;
+        script.units.lock().unwrap().push(timer_unit());
+        script.set_service(finished(t0 + 7200, "ccc", 0));
+        let record = |start: i64, status: i32| TimerRunRecord {
+            timer: "whatever-the-journal-says".into(),
+            service: "sync-job.service".into(),
+            invocation_id: None,
+            started_at: start,
+            finished_at: Some(start + 30),
+            result: Some(if status == 0 { "success" } else { "exit-code" }.into()),
+            exit_status: Some(status),
+        };
+        // The journal also has the run the unit tick observes.
+        *script.history.lock().unwrap() =
+            vec![record(t0, 1), record(t0 + 3600, 0), record(t0 + 7200, 0)];
+
+        // With journal_backfill on, the first unit tick starts the backfill in the background.
+        let shared = start(&dir, script.clone(), true).await;
+        unit_tick(shared.clone()).await;
+        for _ in 0..200 {
+            if stored_runs(&dir).len() == 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let calls = script.history_calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        let (timer, service, since) = &calls[0];
+        assert_eq!(
+            (timer.as_str(), service.as_str()),
+            ("sync.timer", "sync-job.service")
+        );
+        let thirty_days = now() - 30 * 86_400;
+        assert!((thirty_days - 5..=thirty_days).contains(since), "{since}");
+        let sources: Vec<String> = stored_runs(&dir).into_iter().map(|r| r.4).collect();
+        // The observed run keeps its source.
+        assert_eq!(sources, ["journal", "journal", "observed"]);
+        // A second tick does not start it again.
+        unit_tick(shared.clone()).await;
+        assert_eq!(script.history_calls.lock().unwrap().len(), 1);
+
+        // After a restart it continues from the newest stored run, and inserts no duplicates.
+        drop(shared);
+        let shared = start(&dir, script.clone(), true).await;
+        unit_tick(shared.clone()).await;
+        backfill_journal(shared.clone()).await;
+        assert_eq!(stored_runs(&dir).len(), 3);
+        let calls = script.history_calls.lock().unwrap().clone();
+        assert!(calls[1..].iter().all(|c| c.2 == t0 + 7200), "{calls:?}");
+    }
+
+    /// `timer_history` hangs for a while, counting calls.
+    #[derive(Default)]
+    struct SlowJournal(std::sync::atomic::AtomicUsize);
+
+    impl Collector for SlowJournal {
+        fn host_info(&self) -> Result<HostInfo, CollectError> {
+            Err(err())
+        }
+        fn system_snapshot(&self) -> Result<SystemSnapshot, CollectError> {
+            Err(err())
+        }
+        fn units(&self, _: &[UnitRequest]) -> Result<Vec<UnitSnapshot>, CollectError> {
+            Ok(Vec::new())
+        }
+        fn timer_history(
+            &self,
+            _: &str,
+            _: &str,
+            _: i64,
+        ) -> Result<Vec<TimerRunRecord>, CollectError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn journal_timeout_stops_the_backfill() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = timer_config(&dir, false);
+        config.timers.push(config.timers[0].clone());
+        config.timers[1].unit = "other.timer".into();
+        let storage = Storage::open(&config.storage).unwrap();
+        let slow = Arc::new(SlowJournal::default());
+        let mut shared = Shared::new(config, slow.clone()).with_storage(storage);
+        shared.journal_limit = Duration::from_millis(20);
+        backfill_journal(shared.clone()).await;
+        // The second timer is not tried behind the hung call.
+        assert_eq!(slow.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn journal_runs_feed_timer_health() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = Arc::new(Scripted::default());
+        let t0 = now() - 86_400;
+        script.units.lock().unwrap().push(timer_unit());
+        // Not run since boot, but the journal knows a failed run.
+        script.set_service(unit("sync-job.service", "inactive", "dead"));
+        *script.history.lock().unwrap() = vec![TimerRunRecord {
+            timer: "sync.timer".into(),
+            service: "sync-job.service".into(),
+            invocation_id: Some("x".into()),
+            started_at: t0,
+            finished_at: Some(t0 + 5),
+            result: Some("exit-code".into()),
+            exit_status: Some(2),
+        }];
+        let shared = start(&dir, script.clone(), false).await;
+        unit_tick(shared.clone()).await;
+        assert_eq!(timer_health(&shared).0, Health::Unknown);
+        backfill_journal(shared.clone()).await;
+        assert_eq!(
+            timer_health(&shared),
+            (
+                Health::Critical,
+                Some("last run failed: exit-code (status 2)".into())
+            )
+        );
+        assert_eq!(stored_runs(&dir)[0].4, "journal");
     }
 }

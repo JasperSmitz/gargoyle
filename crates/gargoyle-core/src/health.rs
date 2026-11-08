@@ -13,12 +13,19 @@ use crate::config::Levels;
 
 mod service;
 mod system;
+mod timer;
+mod transitions;
 mod window;
 
 pub use service::{RESTART_WINDOW_S, RestartTracker, evaluate_service};
 pub use system::{
     SystemHealth, disk_used_pct, evaluate_system, load_per_core, memory_used_pct, swap_used_pct,
 };
+pub use timer::{
+    OVERDUE_GRACE_S, TimerRuns, evaluate_timer, run_of, service_is_running, service_run,
+    timer_service,
+};
+pub use transitions::{Transition, Transitions};
 pub use window::Window;
 
 /// Health of a target or aggregate.
@@ -50,6 +57,26 @@ impl Health {
         }
     }
 }
+
+impl std::str::FromStr for Health {
+    type Err = UnknownHealth;
+
+    /// The inverse of [`Health::as_str`], e.g. for states read back from storage.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "healthy" => Ok(Health::Healthy),
+            "unknown" => Ok(Health::Unknown),
+            "warning" => Ok(Health::Warning),
+            "critical" => Ok(Health::Critical),
+            _ => Err(UnknownHealth(s.to_owned())),
+        }
+    }
+}
+
+/// A string that is not one of the four health states.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown health state {0:?}")]
+pub struct UnknownHealth(pub String);
 
 impl std::fmt::Display for Health {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -333,6 +360,14 @@ mod tests {
         );
         assert_eq!(short_duration(Duration::from_secs(3600)), "1h");
         assert_eq!(short_duration(Duration::from_secs(90)), "90s");
+    }
+
+    #[test]
+    fn parses_its_own_names() {
+        for h in [Healthy, Unknown, Warning, Critical] {
+            assert_eq!(h.as_str().parse::<Health>(), Ok(h));
+        }
+        assert!("ok".parse::<Health>().is_err());
     }
 
     #[test]

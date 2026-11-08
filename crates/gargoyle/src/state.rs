@@ -1,5 +1,6 @@
 //! The in-memory `State` (ARCHITECTURE §1, §3): the latest collected facts, plus the little
-//! history health needs (CPU/load windows, restart trackers).
+//! history health needs (CPU/load windows, restart trackers, timer runs, the last state of every
+//! target for transition events).
 //!
 //! The scheduler writes it through the `record_*` methods; HTTP handlers read it through the
 //! `*_view` methods, which evaluate health at read time so that staleness is judged against the
@@ -9,14 +10,15 @@ use std::collections::HashMap;
 
 use gargoyle_core::api::{
     CpuSummary, DiskSummary, HostInfo as HostInfoDto, LoadSummary, MemorySummary, NetSummary,
-    Overview, ServiceSummary, SystemSummary, TempSummary,
+    Overview, ServiceSummary, SystemSummary, TargetKind, TempSummary, TimerSummary,
 };
-use gargoyle_core::config::{Config, ServiceConfig};
+use gargoyle_core::config::{Config, ServiceConfig, TimerConfig};
 use gargoyle_core::health::{
-    self, Assessment, Health, RestartTracker, SystemHealth, Window, disk_used_pct,
-    evaluate_service, evaluate_system, is_stale, load_per_core, memory_used_pct,
+    self, Assessment, Health, RestartTracker, SystemHealth, TimerRuns, Transition, Transitions,
+    Window, disk_used_pct, evaluate_service, evaluate_system, evaluate_timer, is_stale,
+    load_per_core, memory_used_pct, run_of, service_is_running, service_run, timer_service,
 };
-use gargoyle_core::model::{HostInfo, SystemSnapshot, UnitSnapshot};
+use gargoyle_core::model::{HostInfo, SystemSnapshot, TimerRunRecord, UnitSnapshot};
 use gargoyle_core::rates::{CpuUsage, NetRate, system_rates};
 
 use crate::storage::samples::{self, Sample};
@@ -24,11 +26,18 @@ use crate::storage::samples::{self, Sample};
 /// Shown as `host` until host info has been collected once.
 const UNKNOWN_HOST: &str = "unknown";
 
+/// How far back journal backfill looks for a timer with no stored runs.
+pub const JOURNAL_BACKFILL_S: i64 = 30 * 86_400;
+
 #[derive(Debug)]
 pub struct State {
     host_info: Option<HostInfo>,
     system: SystemState,
     units: UnitState,
+    transitions: Transitions,
+    /// Per timer: start of the newest run stored before this process started, from where journal
+    /// backfill continues. Captured at restore, before live runs are stored.
+    journal_since: HashMap<String, i64>,
 }
 
 #[derive(Debug)]
@@ -48,6 +57,11 @@ struct SystemState {
 struct UnitState {
     by_unit: HashMap<String, UnitSnapshot>,
     restarts: HashMap<String, RestartTracker>,
+    /// Per configured timer unit.
+    timer_runs: HashMap<String, TimerRuns>,
+    /// Per configured timer unit: the observed run last handed out for storing, so an unchanged
+    /// run is not written every tick.
+    written_runs: HashMap<String, TimerRunRecord>,
     last_ok: Option<i64>,
     error: Option<String>,
 }
@@ -65,6 +79,26 @@ impl State {
                 last_ok: None,
             },
             units: UnitState::default(),
+            transitions: Transitions::default(),
+            journal_since: HashMap::new(),
+        }
+    }
+
+    /// Restores what storage knows from before this process: the last logged state of every
+    /// target, and each timer's newest run and success.
+    pub fn restore(
+        &mut self,
+        states: Vec<(TargetKind, String, Health)>,
+        timers: Vec<(String, TimerRuns)>,
+    ) {
+        for (kind, target, health) in states {
+            self.transitions.restore(kind, &target, health);
+        }
+        for (timer, runs) in timers {
+            if let Some(last) = &runs.last {
+                self.journal_since.insert(timer.clone(), last.started_at);
+            }
+            self.units.timer_runs.insert(timer, runs);
         }
     }
 
@@ -129,6 +163,152 @@ impl State {
         self.units.error = Some(error);
     }
 
+    /// Folds the current or last run of every configured timer's service, as the latest unit
+    /// tick saw it, into the timer's runs. Returns the runs that are new or changed (started,
+    /// or finished since the last call) for storing.
+    pub fn observe_timer_runs(&mut self, config: &Config) -> Vec<TimerRunRecord> {
+        let u = &mut self.units;
+        let mut changed = Vec::new();
+        for cfg in &config.timers {
+            let service = timer_service(cfg, u.by_unit.get(&cfg.unit));
+            let Some(svc) = u.by_unit.get(&service) else {
+                continue;
+            };
+            let Some(run) = service_run(svc) else {
+                continue;
+            };
+            u.timer_runs
+                .entry(cfg.unit.clone())
+                .or_default()
+                .record(&run);
+            let record = TimerRunRecord {
+                timer: cfg.unit.clone(),
+                service,
+                invocation_id: svc.invocation_id.clone(),
+                started_at: run.started_at,
+                finished_at: run.finished_at,
+                result: run.result,
+                exit_status: run.exit_status,
+            };
+            if u.written_runs.get(&cfg.unit) != Some(&record) {
+                u.written_runs.insert(cfg.unit.clone(), record.clone());
+                changed.push(record);
+            }
+        }
+        changed
+    }
+
+    /// After a failed write: hand every observed run out again on the next tick.
+    pub fn forget_written_runs(&mut self) {
+        self.units.written_runs.clear();
+    }
+
+    /// Folds runs from the journal into `timer`'s runs.
+    pub fn record_journal_runs(&mut self, timer: &str, records: &[TimerRunRecord]) {
+        let runs = self.units.timer_runs.entry(timer.to_owned()).or_default();
+        for r in records {
+            runs.record(&run_of(r));
+        }
+    }
+
+    /// `(timer, service, since)` for journal backfill of every configured timer: from the newest
+    /// run stored before startup, or [`JOURNAL_BACKFILL_S`] back.
+    pub fn journal_requests(&self, config: &Config, now: i64) -> Vec<(String, String, i64)> {
+        config
+            .timers
+            .iter()
+            .map(|cfg| {
+                let service = timer_service(cfg, self.units.by_unit.get(&cfg.unit));
+                let since = self
+                    .journal_since
+                    .get(&cfg.unit)
+                    .copied()
+                    .unwrap_or(now - JOURNAL_BACKFILL_S);
+                (cfg.unit.clone(), service, since)
+            })
+            .collect()
+    }
+
+    /// Records the current state of `targets` and returns the transitions among them.
+    pub fn transitions(
+        &mut self,
+        targets: Vec<(TargetKind, String, Assessment)>,
+    ) -> Vec<Transition> {
+        targets
+            .into_iter()
+            .filter_map(|(kind, target, a)| self.transitions.observe(kind, &target, &a))
+            .collect()
+    }
+
+    /// The health of every system target (`cpu`, `load`, `memory`, `swap`, `disk:<mount>`,
+    /// `temp:<label>`) at `now`, judged as the overview judges them. Empty before the first
+    /// sample.
+    pub fn system_targets(
+        &self,
+        config: &Config,
+        now: i64,
+    ) -> Vec<(TargetKind, String, Assessment)> {
+        let s = &self.system;
+        let Some(snap) = &s.last else {
+            return Vec::new();
+        };
+        let h = self.system_health(config, snap);
+        let stale = is_stale(s.last_ok, now, config.collector.system_interval);
+        let judged = |a: &Assessment| {
+            if stale {
+                Assessment::unknown(stale_message(s.last_ok, None, now))
+            } else {
+                a.clone()
+            }
+        };
+        let mut out = vec![
+            ("cpu".to_owned(), judged(&h.cpu)),
+            ("load".to_owned(), judged(&h.load)),
+            ("memory".to_owned(), judged(&h.memory)),
+            ("swap".to_owned(), judged(&h.swap)),
+        ];
+        out.extend(
+            snap.disks
+                .iter()
+                .zip(&h.disks)
+                .map(|(d, a)| (format!("disk:{}", d.mount), judged(a))),
+        );
+        // Missing configured disks stay critical when stale, as in the overview.
+        out.extend(
+            h.missing_disks
+                .iter()
+                .map(|(mount, a)| (format!("disk:{mount}"), a.clone())),
+        );
+        out.extend(
+            snap.temps
+                .iter()
+                .zip(&h.temps)
+                .map(|(t, a)| (format!("temp:{}", t.label), judged(a))),
+        );
+        out.into_iter()
+            .map(|(target, a)| (TargetKind::System, target, a))
+            .collect()
+    }
+
+    /// The health of every configured service and timer at `now`.
+    pub fn unit_targets(&self, config: &Config, now: i64) -> Vec<(TargetKind, String, Assessment)> {
+        let services = config.services.iter().map(|cfg| {
+            (
+                TargetKind::Service,
+                cfg.unit.clone(),
+                self.service_assessment(config, cfg, now),
+            )
+        });
+        let timers = config.timers.iter().map(|cfg| {
+            (
+                TargetKind::Timer,
+                cfg.unit.clone(),
+                self.timer_assessment(config, cfg, now),
+            )
+        });
+        services.chain(timers).collect()
+    }
+
     /// The `host` field of every response.
     pub fn host(&self) -> &str {
         self.host_info
@@ -139,8 +319,10 @@ impl State {
     pub fn overview(&self, config: &Config, now: i64) -> Overview {
         let system = self.system_view(config, now);
         let services = self.services_view(config, now);
+        let timers = self.timers_view(config, now);
         let parts: Vec<Health> = std::iter::once(system.health)
             .chain(services.iter().map(|s| s.health))
+            .chain(timers.iter().map(|t| t.health))
             .collect();
         Overview {
             host: self.host().to_owned(),
@@ -150,8 +332,8 @@ impl State {
             system,
             counts: health::tally(parts),
             services,
-            // Timer health is M3, checks are M4; storage (and so events) is M2.
-            timers: Vec::new(),
+            timers,
+            // Checks are M4. Events come from storage; the HTTP handler adds them.
             checks: Vec::new(),
             recent_events: Vec::new(),
         }
@@ -165,23 +347,33 @@ impl State {
             .collect()
     }
 
-    pub fn service_view(&self, config: &Config, cfg: &ServiceConfig, now: i64) -> ServiceSummary {
+    fn service_assessment(&self, config: &Config, cfg: &ServiceConfig, now: i64) -> Assessment {
         let u = &self.units;
-        let snap = u.by_unit.get(&cfg.unit);
-        let assessment = if is_stale(u.last_ok, now, config.collector.units_interval) {
-            Assessment::unknown(stale_message(u.last_ok, u.error.as_deref(), now))
-        } else {
-            match snap {
-                Some(snap) => {
-                    let restarted = u
-                        .restarts
-                        .get(&cfg.unit)
-                        .is_some_and(|t| t.restarted_recently(now));
-                    evaluate_service(cfg, snap, restarted)
-                }
-                None => Assessment::unknown("no data from collector for this unit"),
+        if let Some(stale) = self.units_stale(config, now) {
+            return stale;
+        }
+        match u.by_unit.get(&cfg.unit) {
+            Some(snap) => {
+                let restarted = u
+                    .restarts
+                    .get(&cfg.unit)
+                    .is_some_and(|t| t.restarted_recently(now));
+                evaluate_service(cfg, snap, restarted)
             }
-        };
+            None => no_unit_data(),
+        }
+    }
+
+    /// `Some(unknown)` when the unit data is stale.
+    fn units_stale(&self, config: &Config, now: i64) -> Option<Assessment> {
+        let u = &self.units;
+        is_stale(u.last_ok, now, config.collector.units_interval)
+            .then(|| Assessment::unknown(stale_message(u.last_ok, u.error.as_deref(), now)))
+    }
+
+    pub fn service_view(&self, config: &Config, cfg: &ServiceConfig, now: i64) -> ServiceSummary {
+        let snap = self.units.by_unit.get(&cfg.unit);
+        let assessment = self.service_assessment(config, cfg, now);
         let text = |f: fn(&UnitSnapshot) -> &String| {
             snap.map_or_else(|| "unknown".to_owned(), |s| f(s).clone())
         };
@@ -198,6 +390,67 @@ impl State {
             restarts: snap.and_then(|s| s.n_restarts).unwrap_or(0),
             memory: snap.and_then(|s| s.memory_current),
         }
+    }
+
+    pub fn timers_view(&self, config: &Config, now: i64) -> Vec<TimerSummary> {
+        config
+            .timers
+            .iter()
+            .map(|cfg| self.timer_view(config, cfg, now))
+            .collect()
+    }
+
+    /// Whether the timer's service is running, judged from the latest unit tick.
+    fn timer_running(&self, cfg: &TimerConfig) -> bool {
+        let by_unit = &self.units.by_unit;
+        let service = timer_service(cfg, by_unit.get(&cfg.unit));
+        by_unit.get(&service).is_some_and(service_is_running)
+    }
+
+    fn timer_assessment(&self, config: &Config, cfg: &TimerConfig, now: i64) -> Assessment {
+        if let Some(stale) = self.units_stale(config, now) {
+            return stale;
+        }
+        let Some(snap) = self.units.by_unit.get(&cfg.unit) else {
+            return no_unit_data();
+        };
+        let runs = self
+            .units
+            .timer_runs
+            .get(&cfg.unit)
+            .cloned()
+            .unwrap_or_default();
+        evaluate_timer(cfg, snap, self.timer_running(cfg), &runs, now)
+    }
+
+    pub fn timer_view(&self, config: &Config, cfg: &TimerConfig, now: i64) -> TimerSummary {
+        let snap = self.units.by_unit.get(&cfg.unit);
+        let assessment = self.timer_assessment(config, cfg, now);
+        TimerSummary {
+            unit: cfg.unit.clone(),
+            name: cfg.name.clone().unwrap_or_else(|| cfg.unit.clone()),
+            service: timer_service(cfg, snap),
+            health: assessment.health,
+            message: assessment.message,
+            active: snap.is_some_and(|s| s.active_state == "active"),
+            last_run: self
+                .units
+                .timer_runs
+                .get(&cfg.unit)
+                .and_then(|r| r.last.clone()),
+            next_run: snap.and_then(|s| s.next_elapse_ts),
+            running: self.timer_running(cfg),
+        }
+    }
+
+    fn system_health(&self, config: &Config, snap: &SystemSnapshot) -> SystemHealth {
+        evaluate_system(
+            &config.thresholds,
+            &config.system.disks,
+            snap,
+            self.system.cpu_window.mean(),
+            self.system.load_window.mean(),
+        )
     }
 
     fn host_info_view(&self, now: i64) -> HostInfoDto {
@@ -234,13 +487,7 @@ impl State {
         let Some(snap) = &s.last else {
             return empty_system();
         };
-        let h: SystemHealth = evaluate_system(
-            &config.thresholds,
-            &config.system.disks,
-            snap,
-            s.cpu_window.mean(),
-            s.load_window.mean(),
-        );
+        let h = self.system_health(config, snap);
         // Stale data keeps its values, so the UI can still show them, but every metric judged
         // from it is unknown (§8). Missing configured disks stay critical: they are reported
         // whether or not samples arrive.
@@ -352,6 +599,10 @@ fn empty_system() -> SystemSummary {
         net: Vec::new(),
         temps: Vec::new(),
     }
+}
+
+fn no_unit_data() -> Assessment {
+    Assessment::unknown("no data from collector for this unit")
 }
 
 /// The message for a stale target: the last collection error if there was one.

@@ -12,6 +12,7 @@ pub const LOAD: &str = "load";
 pub const BYTES_PER_S: &str = "bytes_per_s";
 pub const CELSIUS: &str = "celsius";
 pub const BYTES: &str = "bytes";
+pub const COUNT: &str = "count";
 
 /// One value of one series at one moment.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,18 +63,26 @@ pub fn system(snap: &SystemSnapshot, cpu: Option<CpuUsage>, net: &[NetRate]) -> 
     out
 }
 
-/// Memory of the configured services in one unit tick, for units that report it.
+/// Memory and `NRestarts` of the configured services in one unit tick, each for units that
+/// report it.
 pub fn services(ts: i64, units: &[UnitSnapshot], is_service: impl Fn(&str) -> bool) -> Vec<Sample> {
+    let sample = |key: String, unit, value: f64| Sample {
+        key,
+        unit,
+        ts,
+        value,
+    };
     units
         .iter()
         .filter(|u| is_service(&u.unit))
-        .filter_map(|u| {
-            Some(Sample {
-                key: format!("service.memory:{}", u.unit),
-                unit: BYTES,
-                ts,
-                value: u.memory_current? as f64,
-            })
+        .flat_map(|u| {
+            let memory = u
+                .memory_current
+                .map(|m| sample(format!("service.memory:{}", u.unit), BYTES, m as f64));
+            let restarts = u
+                .n_restarts
+                .map(|n| sample(format!("service.restarts:{}", u.unit), COUNT, f64::from(n)));
+            memory.into_iter().chain(restarts)
         })
         .collect()
 }
@@ -129,15 +138,27 @@ mod tests {
     }
 
     #[test]
-    fn service_memory_only_for_configured_services_with_memory() {
+    fn service_series_only_for_configured_services_that_report_them() {
         let mock = MockCollector::with_boot_time(1, 1_000);
         let reqs = ["a.service", "b.service"].map(gargoyle_core::model::UnitRequest::new);
         let mut units = mock.units_at(&reqs, 5_000);
+        units[0].memory_current = Some(1024);
+        units[0].n_restarts = Some(3);
         units[1].memory_current = None;
+        units[1].n_restarts = None;
         let s = services(5_000, &units, |u| u == "a.service" || u == "b.service");
-        assert_eq!(s.len(), 1);
-        assert_eq!(s[0].key, "service.memory:a.service");
-        assert_eq!(s[0].unit, BYTES);
+        let got: Vec<(&str, &str, f64)> = s
+            .iter()
+            .map(|s| (s.key.as_str(), s.unit, s.value))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("service.memory:a.service", BYTES, 1024.0),
+                ("service.restarts:a.service", COUNT, 3.0)
+            ]
+        );
+        assert!(s.iter().all(|s| s.ts == 5_000));
         assert!(services(5_000, &units, |_| false).is_empty());
     }
 }

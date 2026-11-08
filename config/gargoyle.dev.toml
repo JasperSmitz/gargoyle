@@ -37,3 +37,8 @@ max_age = "26h"
 
 [[timer]]
 unit = "backup.timer"
+
+# The mock gives any "*-quick.timer" a 2-minute period, alternating failed and successful runs.
+[[timer]]
+unit = "demo-quick.timer"
+name = "Quick demo (alternates fail/success)"
