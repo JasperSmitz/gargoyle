@@ -18,8 +18,8 @@ the same change.
 |---|---|
 | M0 Foundation | ✅ Done (2026-11-08) |
 | M1 Live dashboard | ✅ Done (2026-11-08) |
-| M2 History & charts | 🚧 In progress |
-| M3 Timers & events | Planned |
+| M2 History & charts | ✅ Done (2026-11-08) |
+| M3 Timers & events | 🚧 In progress |
 | M4 Checks & health polish | Planned |
 | M5 Security hardening | Planned |
 | M6 Packaging & docs | Planned |
@@ -138,14 +138,14 @@ depends on M2.1, and M2.4 depends on M2.1.
 
 **Acceptance**
 
-- [ ] After restarting, history from before the restart is still present.
-- [ ] Rollup test: a known raw series produces exact 5m avg/min/max/count. Retention test: rows
+- [x] After restarting, history from before the restart is still present.
+- [x] Rollup test: a known raw series produces exact 5m avg/min/max/count. Retention test: rows
       older than retention are deleted.
-- [ ] `/metrics/query` returns at most `points` buckets, uses `resolution: "raw"` for 1h and `"5m"`
+- [x] `/metrics/query` returns at most `points` buckets, uses `resolution: "raw"` for 1h and `"5m"`
       for 7d, and returns 400 on an unknown key.
-- [ ] In mock mode every range in the picker renders a sensible chart within 300ms on the dev box.
-- [ ] On a box without hwmon, the temps section is hidden and there are no errors.
-- [ ] Simulated DB growth test or estimate: 30 series at 10s for 400d stays under 500 MB.
+- [x] In mock mode every range in the picker renders a sensible chart within 300ms on the dev box.
+- [x] On a box without hwmon, the temps section is hidden and there are no errors.
+- [x] Simulated DB growth test or estimate: 30 series at 10s for 400d stays under 500 MB.
 
 ---
 
