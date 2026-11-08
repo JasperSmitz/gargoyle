@@ -1,21 +1,24 @@
-//! The `gargoyle` binary: CLI, scheduler, HTTP server and (in later milestones) storage.
+//! The `gargoyle` binary: CLI, scheduler, storage and HTTP server.
 
 mod http;
 mod scheduler;
 mod state;
+mod storage;
 mod ui;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use gargoyle_collector::{Collector, LinuxCollector, MockCollector};
 use gargoyle_core::config::{AuthMode, CollectorMode, Config};
 use tracing_subscriber::EnvFilter;
+
+use crate::storage::{Storage, backfill_mock};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -102,10 +105,13 @@ fn run(path: &Path) -> anyhow::Result<()> {
         );
     }
 
-    let collector = build_collector(&config)?;
+    // An unusable database is a startup error (wrong path or permissions should be noticed);
+    // failures after this point only cost history, never live data.
+    let storage = Storage::open(&config.storage)?;
+    let collector = build_collector(&config, &storage)?;
     let runtime = tokio::runtime::Runtime::new().context("cannot start async runtime")?;
     let result = runtime.block_on(async {
-        let shared = scheduler::Shared::new(config, collector);
+        let shared = scheduler::Shared::new(config, collector).with_storage(storage);
         let loops = scheduler::spawn(&shared);
         let result = http::serve(listen, shared).await;
         // No new ticks during shutdown, also when binding failed.
@@ -125,9 +131,21 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 /// Fixed so `make dev` shows the same demo every run.
 const MOCK_SEED: u64 = 0x6761_7267;
 
-fn build_collector(config: &Config) -> anyhow::Result<Arc<dyn Collector>> {
+/// In mock mode, an empty database is first filled with a week of history (M2.4).
+fn build_collector(config: &Config, storage: &Storage) -> anyhow::Result<Arc<dyn Collector>> {
     match config.collector.mode {
-        CollectorMode::Mock => Ok(Arc::new(MockCollector::new(MOCK_SEED))),
+        CollectorMode::Mock => {
+            let mock = MockCollector::new(MOCK_SEED);
+            let started = Instant::now();
+            let interval = config.collector.system_interval.as_secs();
+            let interval = i64::try_from(interval).unwrap_or(i64::MAX);
+            if let Some(samples) = backfill_mock(storage, &mock, scheduler::now(), interval)
+                .context("cannot backfill mock history")?
+            {
+                tracing::info!(samples, elapsed = ?started.elapsed(), "backfilled mock history");
+            }
+            Ok(Arc::new(mock))
+        }
         CollectorMode::Linux => Ok(Arc::new(LinuxCollector::new(config.system.clone()))),
     }
 }

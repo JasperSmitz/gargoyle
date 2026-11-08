@@ -1,4 +1,4 @@
-//! Periodic collection (ARCHITECTURE §3): the system tick and the unit tick.
+//! Periodic work (ARCHITECTURE §3): the system tick, the unit tick and the maintenance tick.
 //!
 //! Collector calls block (they read `/proc` or spawn `systemctl`), so each runs in
 //! `spawn_blocking`. A failed collection is logged and recorded; it never stops the loop.
@@ -6,6 +6,9 @@
 //! Calls can also hang: `systemctl` on a stuck D-Bus, `statvfs` on a dead NFS mount. Each call is
 //! awaited for at most [`call_limit`], and while a timed-out call of one kind is still running on
 //! the blocking pool, further ticks of that kind are skipped, so hung threads cannot pile up.
+//!
+//! Storage is best effort: a failed write is logged and the live state keeps updating, so the
+//! dashboard keeps working on a full or broken disk; only history is lost.
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +22,10 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use crate::state::State;
+use crate::storage::{Sample, Storage, samples};
+
+/// How often rollup and retention run (§3).
+pub const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Everything the scheduler and the HTTP handlers share.
 #[derive(Clone)]
@@ -26,6 +33,10 @@ pub struct Shared {
     pub config: Arc<Config>,
     pub collector: Arc<dyn Collector>,
     pub state: Arc<RwLock<State>>,
+    /// `None` only in tests that do not need history.
+    pub storage: Option<Storage>,
+    /// Set while writes fail, so a broken disk logs one warning instead of one per tick.
+    storage_failing: Arc<AtomicBool>,
     /// Host info has its own flag, so a hung host-info read never costs a system sample.
     host_busy: Busy,
     system_busy: Busy,
@@ -41,11 +52,18 @@ impl Shared {
             config: Arc::new(config),
             collector,
             state: Arc::new(RwLock::new(state)),
+            storage: None,
+            storage_failing: Arc::default(),
             host_busy: Busy::default(),
             system_busy: Busy::default(),
             units_busy: Busy::default(),
             host_info_warned: Arc::default(),
         }
+    }
+
+    pub fn with_storage(mut self, storage: Storage) -> Self {
+        self.storage = Some(storage);
+        self
     }
 
     /// Runs `f` with the state locked for writing. A panic while holding the lock cannot leave
@@ -61,13 +79,22 @@ impl Shared {
     }
 }
 
-/// Starts the system and unit loops. Each ticks immediately, then every configured interval.
+/// Starts the system, unit and (with storage) maintenance loops. Each ticks immediately, then
+/// every interval; the immediate maintenance tick catches up on rollups missed while stopped.
 pub fn spawn(shared: &Shared) -> Vec<JoinHandle<()>> {
     let c = &shared.config.collector;
-    vec![
+    let mut loops = vec![
         spawn_loop(shared.clone(), c.system_interval, system_tick),
         spawn_loop(shared.clone(), c.units_interval, unit_tick),
-    ]
+    ];
+    if shared.storage.is_some() {
+        loops.push(spawn_loop(
+            shared.clone(),
+            MAINTENANCE_INTERVAL,
+            maintenance_tick,
+        ));
+    }
+    loops
 }
 
 fn spawn_loop<F, Fut>(shared: Shared, every: Duration, tick: F) -> JoinHandle<()>
@@ -108,7 +135,13 @@ pub async fn system_tick(shared: Shared) {
     })
     .await
     {
-        Ok(snap) => shared.write(|s| s.record_system(snap)),
+        Ok(snap) => {
+            let samples = shared.write(|s| {
+                s.record_system(snap);
+                s.system_samples()
+            });
+            store(&shared, samples).await;
+        }
         // Not stored: the system summary has no message, and it turns `unknown` once its last
         // sample is stale.
         Err(e) => tracing::warn!(error = %e, "system collection failed"),
@@ -133,11 +166,51 @@ pub async fn unit_tick(shared: Shared) {
     })
     .await
     {
-        Ok(units) => shared.write(|s| s.record_units(now(), units)),
+        Ok(units) => {
+            let now = now();
+            let config = &shared.config;
+            let samples = samples::services(now, &units, |unit| {
+                config.services.iter().any(|s| s.unit == unit)
+            });
+            shared.write(|s| s.record_units(now, units));
+            store(&shared, samples).await;
+        }
         Err(e) => {
             tracing::warn!(error = %e, "unit collection failed");
             shared.write(|s| s.record_units_error(e.to_string()));
         }
+    }
+}
+
+/// Appends points to history. Failures are logged (once until the next success), never fatal.
+async fn store(shared: &Shared, samples: Vec<Sample>) {
+    let Some(storage) = &shared.storage else {
+        return;
+    };
+    match storage.append(samples).await {
+        Ok(()) => {
+            if shared.storage_failing.swap(false, Ordering::Relaxed) {
+                tracing::info!("storing history works again");
+            }
+        }
+        Err(e) if !shared.storage_failing.swap(true, Ordering::Relaxed) => {
+            tracing::warn!(
+                error = format!("{e:#}"),
+                "cannot store history; live data is unaffected"
+            );
+        }
+        Err(e) => tracing::debug!(error = format!("{e:#}"), "cannot store history"),
+    }
+}
+
+/// Rollup, retention and the daily optimize.
+pub async fn maintenance_tick(shared: Shared) {
+    let Some(storage) = &shared.storage else {
+        return;
+    };
+    match storage.maintain(now()).await {
+        Ok(m) => tracing::debug!(?m, "storage maintenance done"),
+        Err(e) => tracing::warn!(error = format!("{e:#}"), "storage maintenance failed"),
     }
 }
 
@@ -410,5 +483,56 @@ mod tests {
         for h in handles {
             h.abort();
         }
+    }
+
+    fn with_storage(dir: &tempfile::TempDir) -> Shared {
+        let mut config = config();
+        config.storage.path = dir.path().join("g.db");
+        let storage = Storage::open(&config.storage).unwrap();
+        Shared::new(config, Arc::new(MockCollector::new(1))).with_storage(storage)
+    }
+
+    #[tokio::test]
+    async fn ticks_append_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = with_storage(&dir);
+        system_tick(shared.clone()).await;
+        unit_tick(shared.clone()).await;
+        let keys: Vec<String> = shared
+            .storage
+            .as_ref()
+            .unwrap()
+            .series()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.key)
+            .collect();
+        // The first system tick has no rates yet, so no cpu.* or net.* series.
+        assert!(keys.contains(&"mem.used".to_owned()), "{keys:?}");
+        assert!(keys.contains(&"load.15".to_owned()), "{keys:?}");
+        assert!(!keys.iter().any(|k| k.starts_with("cpu.")), "{keys:?}");
+        // backup-fail.service is failed, so it has no memory.
+        assert!(
+            !keys.iter().any(|k| k.starts_with("service.memory:")),
+            "{keys:?}"
+        );
+        maintenance_tick(shared.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn broken_storage_does_not_stop_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = with_storage(&dir);
+        // Break the schema behind the writer's back.
+        let conn = rusqlite::Connection::open(dir.path().join("g.db")).unwrap();
+        conn.execute_batch("DROP TABLE points_raw").unwrap();
+        system_tick(shared.clone()).await;
+        assert!(shared.storage_failing.load(Ordering::Relaxed));
+        system_tick(shared.clone()).await;
+        let o = shared.read(|s| s.overview(&shared.config, now()));
+        assert_eq!(o.system.disks.len(), 2);
+        assert!(o.system.ts > 0, "the sample was recorded");
+        maintenance_tick(shared.clone()).await;
     }
 }

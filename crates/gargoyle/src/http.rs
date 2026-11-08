@@ -3,16 +3,19 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use axum::extract::rejection::PathRejection;
-use axum::extract::{Path, State as AxumState};
+use axum::extract::rejection::{PathRejection, QueryRejection};
+use axum::extract::{Path, Query, State as AxumState};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use gargoyle_core::api::{ApiError, HealthResponse, Overview, ServiceDetail, ServiceList};
+use gargoyle_core::api::{
+    ApiError, HealthResponse, MetricList, MetricsQuery, Overview, ServiceDetail, ServiceList,
+};
 use gargoyle_core::config::is_valid_unit_name;
 
 use crate::scheduler::{Shared, now};
+use crate::storage::{NativeIntervals, QueryError, QueryRequest};
 use crate::ui;
 
 pub async fn serve(listen: SocketAddr, shared: Shared) -> anyhow::Result<()> {
@@ -35,6 +38,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/v1/overview", get(overview))
         .route("/api/v1/services", get(services))
         .route("/api/v1/services/{unit}", get(service))
+        .route("/api/v1/metrics", get(metrics))
+        .route("/api/v1/metrics/query", get(metrics_query))
         .route("/api", get(api_not_found))
         .route("/api/", get(api_not_found))
         .route("/api/{*rest}", get(api_not_found))
@@ -94,6 +99,76 @@ async fn service(
         events: Vec::new(),
     });
     Json(detail).into_response()
+}
+
+async fn metrics(AxumState(shared): AxumState<Shared>) -> Response {
+    let Some(storage) = &shared.storage else {
+        return unavailable();
+    };
+    match storage.series().await {
+        Ok(series) => Json(MetricList {
+            host: shared.read(|s| s.host().to_owned()),
+            series,
+        })
+        .into_response(),
+        Err(e) => internal_error(&e),
+    }
+}
+
+/// `key` may repeat, which the struct-based `Query` cannot express, so the pairs are parsed by
+/// hand.
+async fn metrics_query(
+    AxumState(shared): AxumState<Shared>,
+    params: Result<Query<Vec<(String, String)>>, QueryRejection>,
+) -> Response {
+    let Ok(Query(pairs)) = params else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "malformed query string",
+        );
+    };
+    let Some(storage) = &shared.storage else {
+        return unavailable();
+    };
+    let now = now();
+    let req = match QueryRequest::parse(&pairs, now) {
+        Ok(r) => r,
+        Err(e) => return error(StatusCode::BAD_REQUEST, "bad_request", &e.0),
+    };
+    let (from, to) = (req.from, req.to);
+    let intervals = NativeIntervals::from_config(&shared.config);
+    match storage.query(req, now, intervals).await {
+        Ok((plan, series)) => Json(MetricsQuery {
+            host: shared.read(|s| s.host().to_owned()),
+            from,
+            to,
+            step: plan.step,
+            resolution: plan.resolution,
+            series,
+        })
+        .into_response(),
+        Err(QueryError::BadRequest(e)) => error(StatusCode::BAD_REQUEST, "bad_request", &e.0),
+        Err(QueryError::Internal(e)) => internal_error(&e),
+    }
+}
+
+fn unavailable() -> Response {
+    error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "unavailable",
+        "history storage is not available",
+    )
+}
+
+/// Details go to the log only; the client gets a generic message.
+fn internal_error(e: &anyhow::Error) -> Response {
+    tracing::error!(error = format!("{e:#}"), "history query failed");
+    error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal",
+        "history query failed",
+    )
 }
 
 async fn api_not_found() -> Response {
@@ -360,6 +435,105 @@ mod tests {
             let (status, body) = get_json(router(shared()), uri).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
             assert_eq!(body["error"]["code"], "bad_request", "{uri}");
+        }
+    }
+
+    /// A router with storage: a backfilled week of mock history plus two live ticks. The
+    /// `TempDir` must outlive the router.
+    async fn with_history() -> (tempfile::TempDir, Router) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::from_toml_str(DEV_CONFIG).unwrap();
+        config.storage.path = dir.path().join("g.db");
+        let storage = crate::storage::Storage::open(&config.storage).unwrap();
+        let mock = MockCollector::new(1);
+        crate::storage::backfill_mock(&storage, &mock, now() - 20, 10).unwrap();
+        let shared = Shared::new(config, Arc::new(mock)).with_storage(storage);
+        system_tick(shared.clone()).await;
+        system_tick(shared.clone()).await;
+        unit_tick(shared.clone()).await;
+        (dir, router(shared))
+    }
+
+    #[tokio::test]
+    async fn metrics_list_matches_the_example_shape() {
+        let (_dir, router) = with_history().await;
+        let (status, body) = get_json(router, "/api/v1/metrics").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_same_shape(&body, &example("metrics.json"), "metrics");
+        let list: MetricList = serde_json::from_value(body).unwrap();
+        assert_eq!(list.host, "gargoyle-mock");
+        let keys: Vec<&str> = list.series.iter().map(|s| s.key.as_str()).collect();
+        for key in [
+            "cpu.usage",
+            "mem.used",
+            "disk.used:/",
+            "service.memory:navidrome.service",
+        ] {
+            assert!(keys.contains(&key), "{key} in {keys:?}");
+        }
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(keys, sorted);
+    }
+
+    #[tokio::test]
+    async fn metrics_query_matches_the_example_shape() {
+        let (_dir, router) = with_history().await;
+        let (status, body) = get_json(
+            router.clone(),
+            "/api/v1/metrics/query?key=cpu.usage&key=mem.used",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_same_shape(&body, &example("metrics-query.json"), "metrics-query");
+        let q: MetricsQuery = serde_json::from_value(body).unwrap();
+        assert_eq!((q.to - q.from, q.step), (3600, 12));
+        assert_eq!(q.resolution, gargoyle_core::api::Resolution::Raw);
+        assert_eq!(q.series.len(), 2);
+        assert!(q.series.iter().all(|s| s.points.len() == 300));
+
+        let to = now();
+        let uri = format!(
+            "/api/v1/metrics/query?key=net.rx%3A*&from={}&to={to}&points=100",
+            to - 7 * 86_400
+        );
+        let (status, body) = get_json(router, &uri).await;
+        assert_eq!(status, StatusCode::OK);
+        let q: MetricsQuery = serde_json::from_value(body).unwrap();
+        assert_eq!(q.resolution, gargoyle_core::api::Resolution::FiveMinutes);
+        assert!(!q.series.is_empty());
+        assert!(q.series.iter().all(|s| s.key.starts_with("net.rx:")));
+        assert!(q.series.iter().all(|s| s.points.len() <= 100));
+    }
+
+    #[tokio::test]
+    async fn metrics_query_bad_requests_are_json_400() {
+        let (_dir, router) = with_history().await;
+        for uri in [
+            "/api/v1/metrics/query",
+            "/api/v1/metrics/query?key=nope",
+            "/api/v1/metrics/query?key=cpu.usage&from=abc",
+            "/api/v1/metrics/query?key=cpu.usage&from=100&to=100",
+            "/api/v1/metrics/query?key=cpu.usage&from=200&to=100",
+            "/api/v1/metrics/query?key=cpu.usage&from=0&to=9223372036854775307&points=1000",
+            "/api/v1/metrics/query?key=cpu.usage&from=-9223372036854775808&to=9223372036854775807",
+            "/api/v1/metrics/query?key=cpu.usage&from=0&to=99999999999999999999",
+            "/api/v1/metrics/query?key=a&key=b&key=c&key=d&key=e&key=f&key=g\
+             &key=h&key=i&key=j&key=k&key=l&key=m",
+        ] {
+            let (status, body) = get_json(router.clone(), uri).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+            assert_same_shape(&body, &example("error.json"), "error");
+            assert_eq!(body["error"]["code"], "bad_request", "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn metrics_without_storage_is_503() {
+        for uri in ["/api/v1/metrics", "/api/v1/metrics/query?key=cpu.usage"] {
+            let (status, body) = get_json(router(shared()), uri).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{uri}");
+            assert_eq!(body["error"]["code"], "unavailable");
         }
     }
 }
