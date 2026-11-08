@@ -71,6 +71,9 @@ pub struct Config {
     pub checks: Vec<CheckConfig>,
 }
 
+/// Two 5m rollup buckets: the open one plus the grace before it is rolled up, with margin.
+const MIN_RAW_RETENTION: Duration = Duration::from_secs(600);
+
 impl Config {
     /// Parses and validates a config file's contents.
     pub fn from_toml_str(text: &str) -> Result<Config, ConfigError> {
@@ -142,7 +145,11 @@ impl Config {
 
     fn validate_storage(&self, v: &mut Validator) {
         let s = &self.storage;
-        v.min_interval("storage.raw_retention", s.raw_retention);
+        // Raw rows must outlive the open 5m bucket and the rollup grace, or they are deleted
+        // before being rolled up.
+        if s.raw_retention < MIN_RAW_RETENTION {
+            v.err("storage.raw_retention", "must be at least 10m");
+        }
         v.min_interval("storage.rollup_retention", s.rollup_retention);
         if s.raw_retention > s.rollup_retention {
             v.err(

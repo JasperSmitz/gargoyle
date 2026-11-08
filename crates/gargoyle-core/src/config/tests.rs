@@ -384,6 +384,11 @@ fn storage_retentions_and_listen_port() {
     );
     assert!(parse("[storage]\nraw_retention = \"400d\"").is_ok());
     assert_eq!(
+        error_paths("[storage]\nraw_retention = \"9m 59s\""),
+        ["storage.raw_retention"]
+    );
+    assert!(parse("[storage]\nraw_retention = \"10m\"").is_ok());
+    assert_eq!(
         error_paths("[server]\nlisten = \"127.0.0.1:0\""),
         ["server.listen"]
     );

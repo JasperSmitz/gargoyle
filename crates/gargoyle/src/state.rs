@@ -19,6 +19,8 @@ use gargoyle_core::health::{
 use gargoyle_core::model::{HostInfo, SystemSnapshot, UnitSnapshot};
 use gargoyle_core::rates::{CpuUsage, NetRate, system_rates};
 
+use crate::storage::samples::{self, Sample};
+
 /// Shown as `host` until host info has been collected once.
 const UNKNOWN_HOST: &str = "unknown";
 
@@ -112,6 +114,15 @@ impl State {
         }
         u.last_ok = Some(now);
         u.error = None;
+    }
+
+    /// The series points of the latest system sample (empty before the first one).
+    pub fn system_samples(&self) -> Vec<Sample> {
+        let s = &self.system;
+        s.last
+            .as_ref()
+            .map(|snap| samples::system(snap, s.cpu, &s.net))
+            .unwrap_or_default()
     }
 
     pub fn record_units_error(&mut self, error: String) {
