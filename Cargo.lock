@@ -348,6 +348,7 @@ version = "0.1.0"
 dependencies = [
  "gargoyle-core",
  "rustix",
+ "serde_json",
  "tempfile",
  "tracing",
 ]

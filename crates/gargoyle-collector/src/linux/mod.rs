@@ -3,6 +3,7 @@
 //! Every path is resolved under `root`, so tests point it at a fixture tree. Parsing lives in pure
 //! `fn(&str) -> Result<T, CollectError>` functions in the submodules (ADR 0006).
 
+mod journal;
 mod mounts;
 mod net;
 mod procfs;
@@ -15,11 +16,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gargoyle_core::config::SystemConfig;
 
+use gargoyle_core::config::is_valid_unit_name;
+
 use crate::{
-    CollectError, Collector, DiskUsage, HostInfo, NetCounters, SystemSnapshot, UnitRequest,
-    UnitSnapshot,
+    CollectError, Collector, DiskUsage, HostInfo, NetCounters, SystemSnapshot, TimerRunRecord,
+    UnitRequest, UnitSnapshot,
 };
 
+pub use journal::FIELDS as JOURNAL_FIELDS;
 pub use systemctl::PROPERTIES as SYSTEMCTL_PROPERTIES;
 
 /// Collector for the host it runs on.
@@ -29,6 +33,8 @@ pub struct LinuxCollector {
     pub root: PathBuf,
     /// The `systemctl` binary. Only ever run as `systemctl show`.
     pub systemctl: PathBuf,
+    /// The `journalctl` binary, for timer run history. Only ever run with a fixed field list.
+    pub journalctl: PathBuf,
     /// Which disks and interfaces to report, and whether to read temperatures.
     pub system: SystemConfig,
 }
@@ -39,6 +45,7 @@ impl LinuxCollector {
         Self {
             root: PathBuf::from("/"),
             systemctl: PathBuf::from("/usr/bin/systemctl"),
+            journalctl: PathBuf::from("/usr/bin/journalctl"),
             system,
         }
     }
@@ -162,6 +169,53 @@ impl Collector for LinuxCollector {
 
     fn units(&self, units: &[UnitRequest]) -> Result<Vec<UnitSnapshot>, CollectError> {
         systemctl::collect(units, |names| systemctl::run_show(&self.systemctl, names))
+    }
+
+    /// Runs rebuilt from PID 1's messages about `service` (see `journal`). A missing or
+    /// unreadable journal logs one warning per process and yields no runs. Bounded in time
+    /// (`journal::LIMITS`), so the blocking thread is released even if the caller timed out.
+    fn timer_history(
+        &self,
+        timer: &str,
+        service: &str,
+        since: i64,
+    ) -> Result<Vec<TimerRunRecord>, CollectError> {
+        // Config validation already guarantees this; the name becomes a journalctl argument.
+        if !is_valid_unit_name(service) || !service.ends_with(".service") {
+            return Err(CollectError::Command {
+                program: "journalctl".into(),
+                message: format!("refusing invalid service name {service:?}"),
+            });
+        }
+        let (stdout, truncated) =
+            match journal::fetch(&self.journalctl, service, since, &journal::LIMITS)? {
+                journal::Fetch::Unavailable(reason) => {
+                    journal::warn_once(&reason);
+                    return Ok(Vec::new());
+                }
+                journal::Fetch::Output {
+                    stdout,
+                    notice,
+                    truncated,
+                } => {
+                    if let Some(notice) = notice {
+                        journal::warn_once(&notice);
+                    }
+                    (stdout, truncated)
+                }
+            };
+        if truncated {
+            tracing::warn!(service, "journal output too large, newest runs are missing");
+        }
+        let parsed = journal::parse_runs(&stdout, timer, service);
+        if parsed.skipped > 0 {
+            tracing::warn!(
+                service,
+                skipped = parsed.skipped,
+                "ignored unparseable journal lines"
+            );
+        }
+        Ok(parsed.runs)
     }
 }
 
