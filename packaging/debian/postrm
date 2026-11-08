@@ -1,0 +1,20 @@
+#!/bin/sh
+# On purge: removes the history database and the statoverrides. The gargoyle system user and
+# group are kept, as usual for Debian packages: admin-added files such as /etc/gargoyle/password
+# still belong to the group, and a reinstall reuses it. DEPLOYMENT.md shows manual removal.
+set -e
+
+#DEBHELPER#
+
+if [ "$1" = purge ]; then
+    rm -rf /var/lib/gargoyle
+    for path in /etc/gargoyle/gargoyle.toml /etc/gargoyle; do
+        if dpkg-statoverride --list "$path" >/dev/null; then
+            dpkg-statoverride --remove "$path"
+        fi
+    done
+    # Files the admin added, such as a password hash file, are left in place.
+    rmdir --ignore-fail-on-non-empty /etc/gargoyle 2>/dev/null || true
+fi
+
+exit 0

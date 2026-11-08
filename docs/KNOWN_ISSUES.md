@@ -4,11 +4,9 @@ Keep entries short; remove them when fixed.
 
 | Area | Issue | Planned |
 |---|---|---|
-| HTTP | Slow-read clients (send requests, never read responses) keep their connection slot, as hyper has no write timeout; 256 such connections make the dashboard unreachable without credentials. Accepted (M5.5 R1): mitigated by a buffering reverse proxy, which DEPLOYMENT will recommend for any non-LAN exposure. | M6.3 doc |
-| Packaging | `ProtectHome=yes` hides a separate `/home` partition from auto disk detection (and a configured `/home` would statvfs the tmpfs). Use `ProtectHome=read-only` or document. | M6.2 |
+| HTTP | Slow-read clients (send requests, never read responses) keep their connection slot, as hyper has no write timeout; 256 such connections make the dashboard unreachable without credentials. Accepted (M5.5 R1): mitigated by a reverse proxy with a client write timeout (nginx also buffers responses), which DEPLOYMENT.md recommends (with Caddy and nginx examples) for any non-LAN exposure. | — |
 | Collector | Per-core CPU counters are indexed by position; CPU hotplug between samples would pair the wrong cores. Rare on a home server. | — |
 | Collector | An unparseable optional systemd property logs a warning every units tick (no dedupe). | if noisy |
-| Collector | Requires systemd ≥ 252 (`--timestamp=unix`); Debian 12+ is the documented minimum. | M6.3 doc |
 | Health | iowait is shown but not part of health evaluation. | — |
 | Checks | A check's transitions are evaluated only after its own probe. If its loop ever stalled (probes are bounded by `timeout ≤ interval`, so it should not), the API would show `unknown` but no event would be logged. | — |
 | Checks | `https` checks trust only the built-in Mozilla roots (webpki-roots), so a target with a self-signed or internal-CA certificate always fails with an "invalid peer certificate" reason. | if needed |

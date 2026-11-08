@@ -1,0 +1,78 @@
+# Gargoyle: read-only monitoring dashboard (ARCHITECTURE §9.6 least privilege).
+#
+# Installed by the .deb as /usr/lib/systemd/system/gargoyle.service. Change settings with a
+# drop-in (`systemctl edit gargoyle`) rather than editing this file, so upgrades keep your changes.
+#
+# Gargoyle needs, and gets, only:
+#   - read access to /proc, /sys and its config in /etc/gargoyle;
+#   - write access to its state directory /var/lib/gargoyle (the SQLite database);
+#   - AF_UNIX to reach systemd over D-Bus (`systemctl show`) and the journal (`journalctl`),
+#     and AF_INET/AF_INET6 to serve HTTP and run the configured checks.
+# PrivateUsers= is deliberately not set: inside a user namespace, D-Bus and journal access
+# checks see an unmapped user and groups, which breaks `systemctl show` and journal backfill.
+# ProcSubset=pid and ProtectProc=invisible are not set either: system metrics come from
+# /proc/stat, /proc/meminfo and friends, and systemctl/journalctl look at /proc/1.
+
+[Unit]
+Description=Gargoyle monitoring dashboard
+Documentation=file:///usr/share/doc/gargoyle/DEPLOYMENT.md
+After=network.target
+
+[Service]
+Type=exec
+User=gargoyle
+Group=gargoyle
+# Journal backfill of past timer runs needs to read the system journal. Membership of
+# systemd-journal lets Gargoyle read every unit's logs; enable it only if you want that history:
+#   systemctl edit gargoyle   ->   [Service]
+#                                  SupplementaryGroups=systemd-journal
+#SupplementaryGroups=systemd-journal
+ExecStart=/usr/bin/gargoyle --config /etc/gargoyle/gargoyle.toml
+Restart=on-failure
+RestartSec=5s
+
+# State: /var/lib/gargoyle, created and chowned by systemd; the database lives here.
+StateDirectory=gargoyle
+StateDirectoryMode=0750
+UMask=0027
+
+# Filesystem
+ProtectSystem=strict
+# read-only rather than yes: with yes, a separate /home partition would be hidden from disk
+# auto-detection, and a configured "/home" would report the empty tmpfs mounted over it.
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# Privileges
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RemoveIPC=yes
+PrivateIPC=yes
+KeyringMode=private
+
+# Network and system calls
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# @resources stays allowed: journalctl raises its open-file limit with setrlimit(), and the
+# score gain of denying it (0.1) is not worth a subtly degraded child process.
+# A filtered call fails with EPERM instead of killing the process (also for the systemctl and
+# journalctl children, which inherit the filter).
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

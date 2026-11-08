@@ -35,3 +35,29 @@ tower.workspace = true
 
 [lints]
 workspace = true
+
+# `make deb` (cargo-deb). Run from the repo root; asset paths are relative to this crate.
+[package.metadata.deb]
+maintainer = "Gargoyle maintainers <gargoyle@localhost>"
+copyright = "Gargoyle contributors"
+section = "admin"
+priority = "optional"
+extended-description = """\
+Gargoyle is a read-only, single-binary monitoring dashboard for one Debian server. It samples \
+system metrics and the state of chosen systemd services and timers, keeps history in SQLite and \
+serves a web dashboard on 127.0.0.1:9077."""
+# Explicit rather than $auto: dpkg-shlibdeps is not available on every build host. The release
+# binary needs GLIBC_2.34 at most (2.39 symbols are weak; see docs/DEPLOYMENT.md), and
+# `systemctl show --timestamp=unix` needs systemd 252.
+depends = "libc6 (>= 2.34), libgcc-s1, adduser, systemd (>= 252)"
+maintainer-scripts = "../../packaging/debian"
+conf-files = ["/etc/gargoyle/gargoyle.toml"]
+assets = [
+    ["target/release/gargoyle", "usr/bin/", "755"],
+    ["../../config/gargoyle.example.toml", "etc/gargoyle/gargoyle.toml", "640"],
+    ["../../docs/DEPLOYMENT.md", "usr/share/doc/gargoyle/", "644"],
+    ["../../docs/CONFIG.md", "usr/share/doc/gargoyle/", "644"],
+]
+# The shipped config is safe to start as is (real collector, loopback only, no services listed),
+# so the package enables and starts the unit, and restarts it on upgrade.
+systemd-units = { unit-name = "gargoyle", unit-scripts = "../../packaging", enable = true, start = true, restart-after-upgrade = true }
