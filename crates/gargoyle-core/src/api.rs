@@ -9,6 +9,8 @@
 //! Integer and float fields are typed to match the examples exactly (`84.0` is `f64`, `42` is an
 //! integer) so a JSON round trip is lossless.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 pub use crate::config::{CheckKind, WarnOn};
@@ -391,7 +393,8 @@ pub struct LibraryResponse {
     pub configured: bool,
     pub library: Option<LibrarySummary>,
     /// The view of the last valid report; `None` before the first read or after a failed one.
-    pub report: Option<LibraryReport>,
+    /// Shared with `State`, so a request does not copy it.
+    pub report: Option<Arc<LibraryReport>>,
 }
 
 /// The library target: `overview.library` and `library` in `GET /api/v1/library`.

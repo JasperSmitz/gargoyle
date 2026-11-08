@@ -449,7 +449,12 @@ messages read `<reason> (<n> consecutive failure[s])`, e.g. `connection refused`
 - **Caps.** The first 500 issues in that order are kept; `issuesTotal` is the number in the
   report and `issuesTruncated` says whether any were dropped. Each issue keeps its first 50
   `paths`, and `pathsTotal` is the full number. The first 100 `errors` are kept (`errorsTotal`,
-  `errorsTruncated`). `summary` always describes the whole report.
+  `errorsTruncated`). `summary` always describes the whole report. Report strings are cut on a
+  character boundary and end in `…` beyond 4 KiB (paths, album `id`) or 1 KiB (all other text);
+  albums whose ids only differ past the cut share one entry. Paths share a 2 MiB budget over the
+  whole view, spent on the worst issues first: once it is spent, an issue lists fewer paths than
+  50 (or none), and `pathsTotal` still counts them all. A `schemaVersion` that is not a short
+  semver is shown as `1.x`. A report with more than 1000 codes in `issues_by_code` is invalid.
 - `minSeverity` and `summary.issuesHidden` are the report's `--min-severity` filter and the
   number of issues it removed, which Gargoyle cannot see either.
 
@@ -675,7 +680,9 @@ worst of its parts in this order.
   - unknown: `report not read yet`, `report not found`, `cannot read report: <io kind>`,
     `report is not a regular file`, `report too large (<n> MiB, max 32 MiB)`,
     `invalid report (line <l>, column <c>)`, `invalid report: <field>`,
-    `unsupported Liner schema <version>`, `no result for <n>s`.
+    `unsupported Liner schema <version>`, `cannot read report: timed out after <n>s`,
+    `cannot read report: still running (timed out after <n>s)`, `cannot read report: reader
+    crashed`, `no result for <n>s`.
   A report filtered with `--min-severity` hides issues from health too; the UI shows
   `issuesHidden`.
 - **Message.** Every non-healthy target carries a short human-readable `message` explaining why,

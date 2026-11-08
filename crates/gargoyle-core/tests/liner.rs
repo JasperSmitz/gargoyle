@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use gargoyle_core::api::{IssueScope, Severity, SeverityCounts};
 use gargoyle_core::liner::{
-    MAX_ERRORS, MAX_ISSUES, MAX_PATHS, ReportError, build_view, parse_report, parse_report_bytes,
+    MAX_CODES, MAX_ERRORS, MAX_ISSUES, MAX_PATHS, ReportError, build_view, parse_report,
+    parse_report_bytes,
 };
 use serde_json::{Value, json};
 
@@ -194,4 +195,86 @@ fn caps_on_a_large_report() {
     assert!(v.errors_truncated);
     // `summary` still describes the whole report.
     assert_eq!(v.summary.unreadable_files, 2);
+}
+
+/// Review M7.5 F1: long arrays are cut while parsing, not after, so a report within the size cap
+/// cannot take many times its size in memory (11 million `""` paths once took ~290 MiB).
+#[test]
+fn long_arrays_are_cut_while_parsing() {
+    let mut report: Value = serde_json::from_str(&fixture("golden-report.json")).unwrap();
+    // The worst issues survive wherever they are: 3000 info issues first, then the golden ones.
+    let filler = report["issues"][1].clone();
+    let golden = report["issues"].as_array().unwrap().clone();
+    let mut issues: Vec<Value> = (0..3000)
+        .map(|i| {
+            let mut issue = filler.clone();
+            issue["code"] = json!(format!("bulk-{i}"));
+            issue["severity"] = json!("info");
+            issue
+        })
+        .collect();
+    issues.extend(golden);
+    report["issues"] = Value::Array(issues);
+    let errors = report["errors"].as_array_mut().unwrap();
+    let error = errors[0].clone();
+    errors.extend(std::iter::repeat_n(error, 5000));
+    // One issue with a million empty paths, spliced in as text (a `Value` of them is slow).
+    let marker = "\"PATHS-MARKER\"";
+    report["issues"][0]["code"] = json!("wide");
+    report["issues"][0]["paths"] = json!(["PATHS-MARKER"]);
+    let empties = vec!["\"\""; 1_000_000].join(",");
+    let text = report.to_string().replacen(marker, &empties, 1);
+
+    let r = parse_report(&text).unwrap();
+    assert_eq!(r.issues.len(), MAX_ISSUES);
+    assert_eq!(r.issues_total, 3007);
+    assert_eq!(
+        r.issues
+            .iter()
+            .filter(|i| i.severity != Severity::Info)
+            .count(),
+        5,
+        "every error and warning is kept"
+    );
+    assert!(r.issues.windows(2).all(|w| w[0].severity >= w[1].severity));
+    let wide = r.issues.iter().find(|i| i.code == "wide").unwrap();
+    assert_eq!((wide.paths.len(), wide.paths_total), (MAX_PATHS, 1_000_000));
+    assert_eq!((r.errors.len(), r.errors_total), (MAX_ERRORS, 5002));
+
+    let v = build_view(&r);
+    assert_eq!((v.issues_total, v.issues_truncated), (3007, true));
+    assert_eq!((v.errors_total, v.errors_truncated), (5002, true));
+}
+
+#[test]
+fn too_many_issue_codes_are_invalid() {
+    let mut report: Value = serde_json::from_str(&fixture("golden-report.json")).unwrap();
+    let codes: serde_json::Map<String, Value> = (0..=MAX_CODES)
+        .map(|i| (format!("code-{i}"), json!(1)))
+        .collect();
+    report["summary"]["issues_by_code"] = Value::Object(codes);
+    let e = parse_report(&report.to_string()).expect_err("too many codes");
+    assert!(matches!(e.error, ReportError::Invalid { .. }), "{e:?}");
+    assert!(
+        e.detail.contains("more than 1000 issue codes"),
+        "{}",
+        e.detail
+    );
+}
+
+/// The version probe skips a non-string `schema_version` instead of building it.
+#[test]
+fn a_huge_non_string_schema_version_is_invalid() {
+    let golden = fixture("golden-report.json");
+    let nested = format!("[{}]", vec!["[]"; 100_000].join(","));
+    let text = golden.replacen(
+        "\"schema_version\": \"1.0.0\"",
+        &format!("\"schema_version\": {nested}"),
+        1,
+    );
+    assert_ne!(text, golden);
+    assert_eq!(
+        parse_report(&text).expect_err("not a string").error,
+        ReportError::InvalidField("schema_version")
+    );
 }

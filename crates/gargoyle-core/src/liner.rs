@@ -6,6 +6,10 @@
 //! enums, as Liner's schema fixes them for a major version. Per-track data (`albums[].discs`),
 //! `issues[].details` and the absolute `root` are never deserialized.
 //!
+//! Arrays that can be long (`issues`, `paths`, `errors`) are cut to what the view keeps while
+//! parsing (`de`), so a report within [`MAX_REPORT_BYTES`] cannot take many times its size in
+//! memory.
+//!
 //! Errors never carry report content or the file path, so their `Display` can go to the API
 //! as is. The detail for the log (serde's own message, which may quote values) is separate.
 
@@ -16,11 +20,17 @@ use serde::Deserialize;
 
 use crate::api::{IssueScope, Severity, SeverityCounts};
 
+mod de;
 mod time;
 mod view;
 
+pub use de::MAX_CODES;
+use de::{Capped, ProbedVersion, WorstIssues};
 pub use time::parse_rfc3339;
-pub use view::{MAX_ERRORS, MAX_ISSUES, MAX_PATHS, build_view};
+pub use view::{
+    MAX_ERRORS, MAX_ISSUES, MAX_PATH_BYTES, MAX_PATHS, MAX_TEXT_BYTES, PATH_BUDGET_BYTES,
+    build_view,
+};
 
 /// The largest report Gargoyle reads (ADR 0007): about 40 times a real 1148-file report.
 pub const MAX_REPORT_BYTES: u64 = 32 * MIB;
@@ -37,8 +47,14 @@ pub struct LinerReport {
     pub options: Options,
     pub summary: Summary,
     pub albums: Vec<Album>,
+    /// The worst [`MAX_ISSUES`], in severity order (error first), report order within one.
     pub issues: Vec<Issue>,
+    /// The number of issues in the report.
+    pub issues_total: u64,
+    /// The first [`MAX_ERRORS`].
     pub errors: Vec<FileError>,
+    /// The number of errors in the report.
+    pub errors_total: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -59,6 +75,8 @@ pub struct Summary {
     pub unreadable_files: u64,
     pub albums: u64,
     pub issues_by_severity: SeverityCounts,
+    /// At most [`MAX_CODES`] codes; a report with more is invalid.
+    #[serde(deserialize_with = "de::codes")]
     pub issues_by_code: BTreeMap<String, u64>,
     pub issues_hidden: u64,
 }
@@ -73,13 +91,41 @@ pub struct Album {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(from = "RawIssue")]
 pub struct Issue {
     pub code: String,
     pub severity: Severity,
     pub scope: IssueScope,
     pub message: String,
+    /// The first [`MAX_PATHS`].
     pub paths: Vec<String>,
+    /// The number of paths in the report.
+    pub paths_total: u64,
     pub album_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawIssue {
+    code: String,
+    severity: Severity,
+    scope: IssueScope,
+    message: String,
+    paths: Capped<String, MAX_PATHS>,
+    album_id: Option<String>,
+}
+
+impl From<RawIssue> for Issue {
+    fn from(raw: RawIssue) -> Self {
+        Self {
+            code: raw.code,
+            severity: raw.severity,
+            scope: raw.scope,
+            message: raw.message,
+            paths: raw.paths.kept,
+            paths_total: raw.paths.total,
+            album_id: raw.album_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -99,14 +145,14 @@ struct RawReport {
     options: Options,
     summary: Summary,
     albums: Vec<Album>,
-    issues: Vec<Issue>,
-    errors: Vec<FileError>,
+    issues: WorstIssues,
+    errors: Capped<FileError, MAX_ERRORS>,
 }
 
 /// Only the version, read before the typed parse.
 #[derive(Deserialize)]
 struct VersionProbe {
-    schema_version: Option<serde_json::Value>,
+    schema_version: Option<ProbedVersion>,
 }
 
 /// Why a report could not be used. `Display` is the API message: it never contains report
@@ -157,7 +203,7 @@ pub fn parse_report(text: &str) -> Result<LinerReport, ParseFailure> {
     };
     let probe: VersionProbe = serde_json::from_str(text).map_err(serde_failure)?;
     let version = match probe.schema_version {
-        Some(serde_json::Value::String(v)) => v,
+        Some(ProbedVersion::Text(v)) => v,
         _ => return Err(ReportError::InvalidField("schema_version").into()),
     };
     match schema_major(&version) {
@@ -175,8 +221,10 @@ pub fn parse_report(text: &str) -> Result<LinerReport, ParseFailure> {
         options: raw.options,
         summary: raw.summary,
         albums: raw.albums,
-        issues: raw.issues,
-        errors: raw.errors,
+        issues: raw.issues.kept,
+        issues_total: raw.issues.total,
+        errors: raw.errors.kept,
+        errors_total: raw.errors.total,
     })
 }
 

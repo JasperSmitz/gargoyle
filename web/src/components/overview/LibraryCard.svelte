@@ -11,6 +11,14 @@
 
   // The music library on the overview; only rendered when `[library]` is configured.
   let { library, serverNow }: { library: LibrarySummary; serverNow: number } = $props();
+
+  // Only non-zero counts get a colored chip, as on the library page: a "0 errors" chip in the
+  // error color would signal a problem that is not there.
+  const nonZero = $derived(
+    library.issueCounts === null
+      ? []
+      : SEVERITY_ORDER.filter((severity) => (library.issueCounts?.[severity] ?? 0) > 0),
+  );
 </script>
 
 <Section title="Library">
@@ -19,16 +27,20 @@
       <p class="message">{library.message}</p>
     {/if}
     {#if library.issueCounts}
-      <ul class="counts" aria-label="Issues by severity">
-        {#each SEVERITY_ORDER as severity (severity)}
-          <li>
-            <SeverityChip
-              {severity}
-              label={severityCount(severity, library.issueCounts[severity])}
-            />
-          </li>
-        {/each}
-      </ul>
+      {#if nonZero.length > 0}
+        <ul class="counts" aria-label="Issues by severity">
+          {#each nonZero as severity (severity)}
+            <li>
+              <SeverityChip
+                {severity}
+                label={severityCount(severity, library.issueCounts[severity])}
+              />
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="no-issues">No issues</p>
+      {/if}
     {/if}
     <p class="meta">
       {#if library.unreadableFiles !== null}
@@ -67,6 +79,11 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  .no-issues {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
   }
 
   .meta {

@@ -64,8 +64,19 @@
 
   // Open albums by id; native <details> otherwise, so keyboard and find-in-page work as usual.
   const expanded = new SvelteSet<string>();
-  const expandAll = () => albums.forEach((a) => expanded.add(a.id));
-  const collapseAll = () => expanded.clear();
+  // `toggle` is async, so the set can lag the DOM: an album closed a moment ago may still be in
+  // it, and "Expand all" adding it again would change nothing (likewise an album just opened and
+  // "Collapse all"). Every `open` binding also reads `bulk` (always >= 0), so both buttons
+  // re-apply all of them; the late `toggle` then reads, and keeps, the new state.
+  let bulk = $state(0);
+  const expandAll = () => {
+    albums.forEach((a) => expanded.add(a.id));
+    bulk++;
+  };
+  const collapseAll = () => {
+    expanded.clear();
+    bulk++;
+  };
 
   function keptIssues(r: LibraryReport): number {
     return r.albums.reduce((n, a) => n + a.issues.length, 0) + r.libraryIssues.length;
@@ -239,7 +250,7 @@
               <details
                 class="album"
                 bind:open={
-                  () => expanded.has(album.id),
+                  () => bulk >= 0 && expanded.has(album.id),
                   (open) => (open ? expanded.add(album.id) : expanded.delete(album.id))
                 }
               >

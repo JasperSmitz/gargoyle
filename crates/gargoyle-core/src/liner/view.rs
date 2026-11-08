@@ -1,9 +1,12 @@
 //! The API view of a report: grouping, ordering and caps (ARCHITECTURE §6, `LibraryReport`).
+//!
+//! Counts are capped while parsing (`de`); here every report string is also capped in bytes, so
+//! the response stays at a few MB whatever the report holds.
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
 
-use super::{Album, Issue, LinerReport};
+use super::{Album, Issue, LinerReport, shown_version};
 use crate::api::{
     CodeCount, LibraryAlbum, LibraryFileError, LibraryIssue, LibraryReport, LinerTool,
     ReportSummary, Severity,
@@ -15,28 +18,43 @@ pub const MAX_ISSUES: usize = 500;
 pub const MAX_PATHS: usize = 50;
 /// Unreadable files kept.
 pub const MAX_ERRORS: usize = 100;
+/// The longest text kept (message, code, kind, title, artist, tool), in bytes.
+pub const MAX_TEXT_BYTES: usize = 1024;
+/// The longest path or album id kept, in bytes (Linux `PATH_MAX`).
+pub const MAX_PATH_BYTES: usize = 4096;
+/// Bytes of issue paths kept over the whole view. Paths go to the worst issues first; once the
+/// budget is spent, later issues list fewer paths (`pathsTotal` still counts them all).
+pub const PATH_BUDGET_BYTES: usize = 2 * 1024 * 1024;
+
+const ELLIPSIS: &str = "…";
 
 /// Builds the view the API serves. The worst response stays at a few MB, whatever the report
 /// size.
 pub fn build_view(report: &LinerReport) -> LibraryReport {
-    // Stable, so the report's order is kept within a severity.
+    // Stable, so the report's order is kept within a severity. Parsing already did this; a
+    // `LinerReport` built by hand may not have.
     let mut ordered: Vec<&Issue> = report.issues.iter().collect();
     ordered.sort_by_key(|i| Reverse(i.severity));
     ordered.truncate(MAX_ISSUES);
 
     let known: HashMap<&str, &Album> = report.albums.iter().map(|a| (a.id.as_str(), a)).collect();
     let mut albums: Vec<(Severity, LibraryAlbum)> = Vec::new();
-    let mut index: HashMap<&str, usize> = HashMap::new();
+    // By the id as shown: ids that only differ beyond the cap share one entry, so `id` stays
+    // unique in the response (the UI keys albums by it).
+    let mut index: HashMap<String, usize> = HashMap::new();
     let mut library_issues = Vec::new();
+    let mut path_budget = PATH_BUDGET_BYTES;
     for issue in ordered {
-        let item = view_issue(issue);
+        let item = view_issue(issue, &mut path_budget);
         let Some(id) = issue.album_id.as_deref() else {
             library_issues.push(item);
             continue;
         };
-        let slot = *index.entry(id).or_insert_with(|| {
+        let shown = clip(id, MAX_PATH_BYTES);
+        let slot = *index.entry(shown).or_insert_with_key(|shown| {
             // Issues arrive worst first, so the first one of an album is its worst.
-            albums.push((issue.severity, empty_album(id, known.get(id).copied())));
+            let album = empty_album(shown.clone(), known.get(id).copied());
+            albums.push((issue.severity, album));
             albums.len() - 1
         });
         albums[slot].1.issues.push(item);
@@ -48,7 +66,7 @@ pub fn build_view(report: &LinerReport) -> LibraryReport {
         .issues_by_code
         .iter()
         .map(|(code, &count)| CodeCount {
-            code: code.clone(),
+            code: clip(code, MAX_TEXT_BYTES),
             count,
         })
         .collect();
@@ -56,10 +74,11 @@ pub fn build_view(report: &LinerReport) -> LibraryReport {
     by_code.sort_by_key(|c| Reverse(c.count));
 
     LibraryReport {
-        schema_version: report.schema_version.clone(),
+        // Only 1.x gets here; anything but a short semver is shown as `1.x`.
+        schema_version: shown_version(&report.schema_version, 1),
         tool: LinerTool {
-            name: report.tool.name.clone(),
-            version: report.tool.version.clone(),
+            name: clip(&report.tool.name, MAX_TEXT_BYTES),
+            version: clip(&report.tool.version, MAX_TEXT_BYTES),
         },
         min_severity: report.options.min_severity,
         summary: ReportSummary {
@@ -78,44 +97,63 @@ pub fn build_view(report: &LinerReport) -> LibraryReport {
             .iter()
             .take(MAX_ERRORS)
             .map(|e| LibraryFileError {
-                path: e.path.clone(),
-                kind: e.kind.clone(),
-                message: e.message.clone(),
+                path: clip(&e.path, MAX_PATH_BYTES),
+                kind: clip(&e.kind, MAX_TEXT_BYTES),
+                message: clip(&e.message, MAX_TEXT_BYTES),
             })
             .collect(),
-        issues_total: count(report.issues.len()),
-        issues_truncated: report.issues.len() > MAX_ISSUES,
-        errors_total: count(report.errors.len()),
-        errors_truncated: report.errors.len() > MAX_ERRORS,
+        issues_total: report.issues_total,
+        issues_truncated: report.issues_total > MAX_ISSUES as u64,
+        errors_total: report.errors_total,
+        errors_truncated: report.errors_total > MAX_ERRORS as u64,
     }
 }
 
-fn view_issue(issue: &Issue) -> LibraryIssue {
+fn view_issue(issue: &Issue, path_budget: &mut usize) -> LibraryIssue {
+    let mut paths = Vec::new();
+    for path in issue.paths.iter().take(MAX_PATHS) {
+        let path = clip(path, MAX_PATH_BYTES);
+        let Some(left) = path_budget.checked_sub(path.len()) else {
+            break;
+        };
+        *path_budget = left;
+        paths.push(path);
+    }
     LibraryIssue {
-        code: issue.code.clone(),
+        code: clip(&issue.code, MAX_TEXT_BYTES),
         severity: issue.severity,
         scope: issue.scope,
-        message: issue.message.clone(),
-        paths: issue.paths.iter().take(MAX_PATHS).cloned().collect(),
-        paths_total: count(issue.paths.len()),
+        message: clip(&issue.message, MAX_TEXT_BYTES),
+        paths,
+        paths_total: issue.paths_total,
     }
 }
 
 /// An album entry without issues yet. An `album_id` that is not among the report's albums still
 /// gets one, with no title, artist or counts.
-fn empty_album(id: &str, album: Option<&Album>) -> LibraryAlbum {
+fn empty_album(id: String, album: Option<&Album>) -> LibraryAlbum {
+    let text = |t: &Option<String>| t.as_deref().map(|t| clip(t, MAX_TEXT_BYTES));
     LibraryAlbum {
-        id: id.to_owned(),
-        title: album.and_then(|a| a.title.clone()),
-        album_artist: album.and_then(|a| a.album_artist.clone()),
+        id,
+        title: album.and_then(|a| text(&a.title)),
+        album_artist: album.and_then(|a| text(&a.album_artist)),
         disc_count: album.map_or(0, |a| a.disc_count),
         track_count: album.map_or(0, |a| a.track_count),
         issues: Vec::new(),
     }
 }
 
-fn count(n: usize) -> u64 {
-    u64::try_from(n).unwrap_or(u64::MAX)
+/// `text`, or if it is longer than `max` bytes its start (cut on a char boundary) and `…`, `max`
+/// bytes at most.
+fn clip(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    let mut end = max.saturating_sub(ELLIPSIS.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{ELLIPSIS}", &text[..end])
 }
 
 #[cfg(test)]
@@ -137,6 +175,7 @@ mod tests {
             },
             message: format!("{code} message"),
             paths: vec![format!("{code}.flac")],
+            paths_total: 1,
             album_id: album.map(Into::into),
         }
     }
@@ -153,6 +192,8 @@ mod tests {
 
     fn report(issues: Vec<Issue>, albums: Vec<Album>, errors: usize) -> LinerReport {
         LinerReport {
+            issues_total: issues.len() as u64,
+            errors_total: errors as u64,
             schema_version: "1.0.0".into(),
             tool: Tool {
                 name: "liner".into(),
@@ -264,7 +305,8 @@ mod tests {
             .collect();
         // An error at the end still makes it in: the cap applies after ordering.
         issues.push(issue("late-error", E, None));
-        issues[0].paths = (0..MAX_PATHS + 7).map(|i| format!("p{i}")).collect();
+        issues[0].paths = (0..MAX_PATHS).map(|i| format!("p{i}")).collect();
+        issues[0].paths_total = 57;
         let v = build_view(&report(issues, vec![album("A")], MAX_ERRORS + 1));
 
         assert_eq!(v.library_issues[0].code, "late-error");
@@ -278,5 +320,110 @@ mod tests {
         assert_eq!(v.errors.len(), MAX_ERRORS);
         assert_eq!((v.errors_total, v.errors_truncated), (101, true));
         assert_eq!(v.errors[0].path, "bad0.flac");
+    }
+
+    #[test]
+    fn clip_cuts_on_a_char_boundary() {
+        assert_eq!(clip("short", 8), "short");
+        assert_eq!(clip("exactly8", 8), "exactly8");
+        assert_eq!(clip("123456789", 8), "12345…");
+        // `é` is 2 bytes and `…` 3: a cut inside an `é` backs off to its start.
+        assert_eq!(clip("abéééé", 6), "ab…");
+        assert_eq!(clip("abéééé", 7), "abé…");
+        assert_eq!(clip("abéééé", 8), "abé…");
+        for max in 3..20 {
+            assert!(clip(&"ü".repeat(20), max).len() <= max);
+        }
+    }
+
+    /// Every report string is capped, so one huge field cannot make every response huge.
+    #[test]
+    fn long_strings_are_clipped() {
+        let huge = "x".repeat(MAX_PATH_BYTES * 4);
+        let mut long = issue("c", E, Some(&huge));
+        long.code = huge.clone();
+        long.message = huge.clone();
+        long.paths = vec![huge.clone(); 3];
+        let mut r = report(vec![long], vec![album(&huge)], 1);
+        r.schema_version = format!("1.{huge}");
+        r.tool.name = huge.clone();
+        r.tool.version = huge.clone();
+        r.albums[0].title = Some(huge.clone());
+        r.albums[0].album_artist = Some(huge.clone());
+        r.errors[0].path = huge.clone();
+        r.errors[0].kind = huge.clone();
+        r.errors[0].message = huge.clone();
+        r.summary.issues_by_code = BTreeMap::from([(huge.clone(), 1)]);
+
+        let v = build_view(&r);
+        assert_eq!(v.schema_version, "1.x");
+        let text = [
+            &v.tool.name,
+            &v.tool.version,
+            &v.albums[0].issues[0].code,
+            &v.albums[0].issues[0].message,
+            v.albums[0].title.as_ref().unwrap(),
+            v.albums[0].album_artist.as_ref().unwrap(),
+            &v.errors[0].kind,
+            &v.errors[0].message,
+            &v.summary.by_code[0].code,
+        ];
+        for t in text {
+            assert_eq!(t.len(), MAX_TEXT_BYTES);
+            assert!(t.ends_with(ELLIPSIS));
+        }
+        let paths = [
+            &v.albums[0].id,
+            &v.albums[0].issues[0].paths[0],
+            &v.errors[0].path,
+        ];
+        for p in paths {
+            assert_eq!(p.len(), MAX_PATH_BYTES);
+            assert!(p.ends_with(ELLIPSIS));
+        }
+        // The album was still found by its full id.
+        assert_eq!(v.albums[0].track_count, 3);
+        assert!(serde_json::to_string(&v).unwrap().len() < 32 * 1024);
+    }
+
+    /// Album ids that only differ past the cap become one entry, so ids stay unique.
+    #[test]
+    fn clipped_album_ids_stay_unique() {
+        let base = "a".repeat(MAX_PATH_BYTES);
+        let (one, two) = (format!("{base}1"), format!("{base}2"));
+        let r = report(
+            vec![issue("e", E, Some(&one)), issue("w", W, Some(&two))],
+            vec![],
+            0,
+        );
+        let v = build_view(&r);
+        assert_eq!(v.albums.len(), 1);
+        assert_eq!(v.albums[0].issues.len(), 2);
+    }
+
+    #[test]
+    fn paths_share_a_byte_budget() {
+        let path = "p".repeat(MAX_PATH_BYTES);
+        let per_issue = MAX_PATHS * MAX_PATH_BYTES;
+        let issues: Vec<Issue> = (0..MAX_ISSUES)
+            .map(|i| {
+                let mut issue = issue(&format!("i{i}"), W, None);
+                issue.paths = vec![path.clone(); MAX_PATHS];
+                issue.paths_total = 60;
+                issue
+            })
+            .collect();
+        let v = build_view(&report(issues, vec![], 0));
+        let kept: usize = v
+            .library_issues
+            .iter()
+            .flat_map(|i| &i.paths)
+            .map(String::len)
+            .sum();
+        assert_eq!(kept, PATH_BUDGET_BYTES);
+        let full = PATH_BUDGET_BYTES / per_issue;
+        assert_eq!(v.library_issues[0].paths.len(), MAX_PATHS);
+        assert_eq!(v.library_issues[full + 1].paths.len(), 0);
+        assert_eq!(v.library_issues[full + 1].paths_total, 60);
     }
 }
