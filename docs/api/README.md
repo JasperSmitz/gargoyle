@@ -10,7 +10,7 @@ These files are the **canonical** JSON shapes for `/api/v1`. The prose contract 
 
 | Endpoint | File | Top-level type |
 |---|---|---|
-| `GET /api/v1/health` | `examples/health.json` | `Health` (unauthenticated) |
+| `GET /api/v1/health` | `examples/health.json` | `HealthResponse` (unauthenticated) |
 | `GET /api/v1/overview` | `examples/overview.json` | `Overview` |
 | `GET /api/v1/services` | `examples/services.json` | `{ host, services: ServiceSummary[] }` |
 | `GET /api/v1/services/{unit}` | `examples/service-detail.json` | `{ host, service, events }` |

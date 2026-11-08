@@ -326,6 +326,12 @@ stripped.
 { "id": 812, "ts": 1794190042, "targetKind": "timer", "target": "music-sync.timer",
   "from": "healthy", "to": "critical", "message": "last run failed: exit-code (status 1)" }
 ```
+`from` is `null` for a target's first observed state. `message` is `null` when healthy.
+
+**Nullable fields** (always present, may be `null`): `Event.{from,message}`,
+`ServiceSummary.{message,since,memory}`, `TimerSummary.{message,lastRun,nextRun}`,
+`TimerRun.{finishedAt,duration,result,exitStatus}` (a run in progress), `CheckSummary.{message,lastCheck,latencyMs}`,
+`SeriesInfo.label`, and point `avg/min/max`. Every other field is non-null.
 
 **`GET /api/v1/metrics`**: returns
 `{ "host", "series": [ { "key": "disk.used:/", "metric": "disk.used", "label": "/", "unit": "percent" } ] }`.
