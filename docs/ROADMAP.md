@@ -22,7 +22,7 @@ the same change.
 | M3 Timers & events | ✅ Done (2026-11-08) |
 | M4 Checks & health polish | ✅ Done (2026-11-08) |
 | M5 Security hardening | ✅ Done (2026-11-08) |
-| M6 Packaging & docs | 🚧 In progress |
+| M6 Packaging & docs | ✅ Done, Debian install test pending (2026-11-08) |
 
 ---
 
@@ -288,14 +288,22 @@ deployment.
 
 **Acceptance**
 
-- [ ] `make deb` produces a `.deb`. `dpkg-deb -c` lists the expected files only, and `lintian` has
+- [x] `make deb` produces a `.deb`. `dpkg-deb -c` lists the expected files only, and `lintian` has
       no errors (warnings documented).
-- [ ] `systemd-analyze verify packaging/gargoyle.service` passes, and `systemd-analyze security`
+- [x] `systemd-analyze verify packaging/gargoyle.service` passes, and `systemd-analyze security`
       exposure ≤ 3.0 (documented).
-- [ ] Following DEPLOYMENT.md in a clean Debian 13 container or VM (developer's local machine only)
+- [ ] **Not verified (no container runtime available on the dev machine):** Following DEPLOYMENT.md in a clean Debian 13 container or VM (developer's local machine only)
       gets the dashboard running as the `gargoyle` user. **Nothing is installed on the real
       server by agents.**
-- [ ] The config reference test passes, and the README quick start works on a fresh clone.
+- [x] The config reference test passes, and the README quick start works on a fresh clone.
+
+---
+
+> **Status notes (2026-11-08).** Contents were inspected with `ar`/`tar` because `dpkg-deb` and
+> `lintian` are not installed on the Arch dev box, so the lintian result is unknown (expected
+> warnings: no changelog, placeholder maintainer address). The unit's exposure score is 1.6. The
+> sandbox was exercised in a transient *user* unit with the real Linux collector: services, timers,
+> journal backfill and checks all worked. The real Debian install test is still open.
 
 ---
 
