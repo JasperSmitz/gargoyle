@@ -1,15 +1,19 @@
-//! The `gargoyle` binary: CLI, HTTP server and (in later milestones) scheduler and storage.
+//! The `gargoyle` binary: CLI, scheduler, HTTP server and (in later milestones) storage.
 
 mod http;
+mod scheduler;
+mod state;
 mod ui;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use gargoyle_core::config::{AuthMode, Config};
+use gargoyle_collector::{Collector, MockCollector};
+use gargoyle_core::config::{AuthMode, CollectorMode, Config};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -97,6 +101,28 @@ fn run(path: &Path) -> anyhow::Result<()> {
         );
     }
 
+    let collector = build_collector(&config)?;
     let runtime = tokio::runtime::Runtime::new().context("cannot start async runtime")?;
-    runtime.block_on(http::serve(listen))
+    runtime.block_on(async {
+        let shared = scheduler::Shared::new(config, collector);
+        let _loops = scheduler::spawn(&shared);
+        http::serve(listen, shared).await
+    })
+}
+
+/// Fixed so `make dev` shows the same demo every run.
+const MOCK_SEED: u64 = 0x6761_7267;
+
+fn build_collector(config: &Config) -> anyhow::Result<Arc<dyn Collector>> {
+    match config.collector.mode {
+        CollectorMode::Mock => Ok(Arc::new(MockCollector::new(MOCK_SEED))),
+        CollectorMode::Linux => linux_collector(config),
+    }
+}
+
+// TODO(M1 merge): construct `gargoyle_collector::linux::LinuxCollector` here (root "/", the
+// configured disks/interfaces/temperatures, systemctl from PATH). It is being written on a
+// parallel branch; until it is merged, linux mode refuses to start.
+fn linux_collector(_config: &Config) -> anyhow::Result<Arc<dyn Collector>> {
+    anyhow::bail!("linux collector not yet integrated; use [collector] mode = \"mock\"")
 }

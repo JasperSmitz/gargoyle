@@ -16,6 +16,9 @@ use serde::{Deserialize, Serialize};
 /// Suffixes accepted by the unit-name rule in ARCHITECTURE §4.
 const UNIT_SUFFIXES: &[&str] = &["service", "timer", "socket", "mount", "target", "path"];
 
+/// systemd's `UNIT_NAME_MAX`.
+const MAX_UNIT_NAME_LEN: usize = 255;
+
 const MIN_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, thiserror::Error)]
@@ -289,14 +292,22 @@ impl Validator {
     }
 }
 
-/// Implements `^[A-Za-z0-9:_.@\-]+\.(service|timer|socket|mount|target|path)$` from ARCHITECTURE §4.
+/// Implements `^[A-Za-z0-9:_.@\-]+\.(service|timer|socket|mount|target|path)$` from ARCHITECTURE §4,
+/// plus the systemd rules that the regex alone lets through: at most 255 characters, no leading
+/// `@`, and no empty template instance (`foo@.service` names a template, which cannot be
+/// queried).
 ///
-/// Unit names end up as `systemctl` arguments, so this is a safety check, not just hygiene.
+/// Unit names end up as `systemctl` arguments, so this is a safety check, not just hygiene. It
+/// also keeps the batched `systemctl show` working: one name systemd rejects fails the whole call,
+/// every tick.
 pub fn is_valid_unit_name(name: &str) -> bool {
     let Some((stem, suffix)) = name.rsplit_once('.') else {
         return false;
     };
-    !stem.is_empty()
+    name.len() <= MAX_UNIT_NAME_LEN
+        && !stem.is_empty()
+        && !stem.starts_with('@')
+        && !stem.ends_with('@')
         && UNIT_SUFFIXES.contains(&suffix)
         && stem
             .chars()

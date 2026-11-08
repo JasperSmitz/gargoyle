@@ -283,6 +283,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "gargoyle-collector",
  "gargoyle-core",
  "rust-embed",
  "serde",

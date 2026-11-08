@@ -60,9 +60,10 @@ struct CoreAcc {
 }
 
 impl MockCollector {
-    /// A mock host that booted a few days before now.
+    /// A mock host that booted 8–9 days before now, so a 7-day history backfill never samples
+    /// before boot.
     pub fn new(seed: u64) -> Self {
-        let boot_time = now() - 3 * 86_400 - (mix(seed, 1) % 86_400) as i64;
+        let boot_time = now() - 8 * 86_400 - (mix(seed, 1) % 86_400) as i64;
         Self::with_boot_time(seed, boot_time)
     }
 
@@ -76,7 +77,8 @@ impl MockCollector {
     }
 
     /// The system sample at `ts` (unix seconds). Counters advance from the previous call; a `ts`
-    /// earlier than the previous one returns the counters unchanged.
+    /// earlier than the previous one returns the counters unchanged. Before `boot_time` the host
+    /// is treated as just booted: uptime and counters stay at 0.
     pub fn snapshot_at(&self, ts: i64) -> SystemSnapshot {
         let (cpu, net) = self.advance(ts);
         let total_mem = 16 * GIB;
@@ -152,7 +154,8 @@ impl MockCollector {
     /// Integrates CPU and network counters up to `ts` and returns them.
     fn advance(&self, ts: i64) -> (CpuCounters, Vec<NetCounters>) {
         let mut c = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
-        let from = c.last_ts.unwrap_or(self.boot_time);
+        // Nothing accumulates before boot, so uptime and counters stay consistent.
+        let from = c.last_ts.unwrap_or(self.boot_time).max(self.boot_time);
         if ts > from {
             let stepped_from = from.max(ts - MAX_STEPPED_GAP_S);
             self.add_average(&mut c, (stepped_from - from) as f64);
@@ -567,6 +570,25 @@ mod tests {
         let earlier = m.snapshot_at(T0);
         assert_eq!(later.cpu, earlier.cpu);
         assert_eq!(later.net, earlier.net);
+    }
+
+    #[test]
+    fn nothing_accumulates_before_boot() {
+        let m = mock();
+        let a = m.snapshot_at(BOOT - 86_400);
+        let b = m.snapshot_at(BOOT - 10);
+        assert_eq!(a.cpu.total.total(), 0);
+        assert_eq!(b.cpu.total.total(), 0);
+        assert_eq!(b.uptime_s, 0.0);
+        let c = m.snapshot_at(BOOT + 100);
+        let expected = 100.0 * CORES as f64 * HZ;
+        assert!((c.cpu.total.total() as f64 - expected).abs() < 10.0);
+    }
+
+    #[test]
+    fn default_boot_time_allows_a_week_of_backfill() {
+        let m = MockCollector::new(5);
+        assert!(m.boot_time < now() - 8 * 86_400);
     }
 
     #[test]

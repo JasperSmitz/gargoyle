@@ -13,6 +13,9 @@ pub struct SystemHealth {
     pub swap: Assessment,
     pub disks: Vec<Assessment>,
     pub temps: Vec<Assessment>,
+    /// Mounts listed in `[system] disks` but absent from the sample (not mounted, or statvfs
+    /// failed), each critical, in config order.
+    pub missing_disks: Vec<(String, Assessment)>,
 }
 
 impl SystemHealth {
@@ -22,6 +25,7 @@ impl SystemHealth {
             [&self.cpu, &self.load, &self.memory, &self.swap]
                 .into_iter()
                 .chain(&self.disks)
+                .chain(self.missing_disks.iter().map(|(_, a)| a))
                 .chain(&self.temps),
         )
     }
@@ -65,8 +69,12 @@ pub fn load_per_core(load1: f64, cores: u32) -> Option<f64> {
 /// `cpu_mean` and `load_mean` are the [`super::Window`] means of CPU usage (percent) and
 /// [`load_per_core`] over their configured windows; every other metric uses the latest sample.
 /// `None` means no sample yet (CPU needs two snapshots), which is `unknown`.
+///
+/// `expected_disks` is `[system] disks`. Each entry missing from the sample is critical. An empty
+/// list means auto-detection, where nothing is expected and so nothing can be missing.
 pub fn evaluate_system(
     t: &Thresholds,
+    expected_disks: &[String],
     snap: &SystemSnapshot,
     cpu_mean: Option<f64>,
     load_mean: Option<f64>,
@@ -139,6 +147,15 @@ pub fn evaluate_system(
         })
         .collect();
 
+    let missing_disks = expected_disks
+        .iter()
+        .filter(|m| !snap.disks.iter().any(|d| &d.mount == *m))
+        .map(|m| {
+            let a = Assessment::new(Health::Critical, format!("disk {m} not mounted"));
+            (m.clone(), a)
+        })
+        .collect();
+
     SystemHealth {
         cpu,
         load,
@@ -146,6 +163,7 @@ pub fn evaluate_system(
         swap,
         disks,
         temps,
+        missing_disks,
     }
 }
 
@@ -215,7 +233,7 @@ mod tests {
     }
 
     fn eval(snap: &SystemSnapshot, cpu: Option<f64>, load: Option<f64>) -> SystemHealth {
-        evaluate_system(&Thresholds::default(), snap, cpu, load)
+        evaluate_system(&Thresholds::default(), &[], snap, cpu, load)
     }
 
     fn assert_assessment(a: &Assessment, health: Health, message: Option<&str>, case: &str) {
@@ -390,7 +408,7 @@ mod tests {
         for (d, health, msg) in cases {
             let mut s = snap();
             s.disks = vec![d.clone()];
-            let h = evaluate_system(&t, &s, Some(1.0), Some(0.1));
+            let h = evaluate_system(&t, &[], &s, Some(1.0), Some(0.1));
             assert_assessment(&h.disks[0], *health, *msg, &d.mount);
         }
     }
@@ -466,5 +484,47 @@ mod tests {
     fn overall_unknown_when_only_cpu_missing() {
         let h = eval(&snap(), None, Some(0.1));
         assert_eq!(h.overall().health, Unknown);
+    }
+
+    #[test]
+    fn configured_disks_must_be_present() {
+        let mut s = snap(); // has "/" only
+        s.disks.push(disk("/srv", 10, 90));
+        let expected = |m: &[&str]| m.iter().map(|m| (*m).to_owned()).collect::<Vec<_>>();
+        let cases: &[(&[&str], &[&str])] = &[
+            (&[], &[]), // auto-detect: nothing expected
+            (&["/", "/srv"], &[]),
+            (&["/srv", "/backup"], &["/backup"]),
+            (&["/data", "/", "/backup"], &["/data", "/backup"]),
+        ];
+        for (configured, missing) in cases {
+            let h = evaluate_system(
+                &Thresholds::default(),
+                &expected(configured),
+                &s,
+                Some(1.0),
+                Some(0.1),
+            );
+            let got: Vec<&str> = h.missing_disks.iter().map(|(m, _)| m.as_str()).collect();
+            assert_eq!(got, *missing, "{configured:?}");
+            for (m, a) in &h.missing_disks {
+                assert_assessment(a, Critical, Some(&format!("disk {m} not mounted")), m);
+            }
+        }
+    }
+
+    #[test]
+    fn missing_disk_makes_the_system_critical() {
+        let h = evaluate_system(
+            &Thresholds::default(),
+            &["/srv".to_owned()],
+            &snap(),
+            Some(1.0),
+            Some(0.1),
+        );
+        assert_eq!(
+            h.overall(),
+            Assessment::new(Critical, "disk /srv not mounted")
+        );
     }
 }

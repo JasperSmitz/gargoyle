@@ -14,23 +14,31 @@ const MIB: u64 = 1024 * 1024;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RestartTracker {
     last_count: Option<u32>,
+    /// `(InvocationID, ExecMainStartTimestamp)` of the last observation.
+    last_run: Option<(Option<String>, Option<i64>)>,
     last_increase_ts: Option<i64>,
 }
 
 impl RestartTracker {
-    /// Records the `NRestarts` value seen at `ts`.
+    /// Records the unit's `NRestarts` and run identity as seen at `ts`.
     ///
-    /// The first value seen is only a baseline: restarts that happened before Gargoyle started
-    /// have no timestamp. A decrease (the unit was restarted by hand, which resets the counter)
-    /// is a new baseline too.
-    pub fn observe(&mut self, ts: i64, n_restarts: Option<u32>) {
-        let Some(n) = n_restarts else {
+    /// The first observation is only a baseline: restarts that happened before Gargoyle started
+    /// have no timestamp. After that, a restart is counted when `NRestarts` went up, or when the
+    /// run changed (new invocation or main-process start) and `NRestarts` is non-zero. The second
+    /// rule catches a manual restart (which resets the counter) followed by an automatic one
+    /// within the same tick, where the count alone can look unchanged or lower.
+    pub fn observe(&mut self, ts: i64, unit: &UnitSnapshot) {
+        let Some(n) = unit.n_restarts else {
             return;
         };
-        if self.last_count.is_some_and(|prev| n > prev) {
+        let run = (unit.invocation_id.clone(), unit.exec_main_start_ts);
+        if let (Some(prev_n), Some(prev_run)) = (self.last_count, &self.last_run)
+            && (n > prev_n || (n > 0 && *prev_run != run))
+        {
             self.last_increase_ts = Some(ts);
         }
         self.last_count = Some(n);
+        self.last_run = Some(run);
     }
 
     /// True if `NRestarts` went up within [`RESTART_WINDOW_S`] before `now`.
@@ -93,10 +101,23 @@ pub fn evaluate_service(
     {
         parts.push(Assessment::new(
             Health::Warning,
-            format!("memory {} MB (warning > {limit_mb} MB)", bytes / MIB),
+            format!(
+                "memory {} MiB (warning > {limit_mb} MiB)",
+                mib_rounded_up(bytes)
+            ),
         ));
     }
     Assessment::combine(&parts)
+}
+
+/// MiB to one decimal, rounded up so a value just over the limit never prints as the limit.
+fn mib_rounded_up(bytes: u64) -> String {
+    let v = (bytes as f64 / MIB as f64 * 10.0).ceil() / 10.0;
+    if v.fract() == 0.0 {
+        format!("{v:.0}")
+    } else {
+        format!("{v:.1}")
+    }
 }
 
 /// `failed: exit-code (status 1)`, `failed: signal`, or plain `failed`.
@@ -261,6 +282,20 @@ mod tests {
             (A, unit("loaded", "active", "exited"), false, Healthy, None),
             (
                 A,
+                unit("loaded", "reloading", "reload"),
+                false,
+                Warning,
+                Some("reloading (reload)"),
+            ),
+            (
+                A,
+                unit("loaded", "deactivating", "stop-sigterm"),
+                false,
+                Warning,
+                Some("deactivating (stop-sigterm)"),
+            ),
+            (
+                A,
                 unit("loaded", "activating", "start"),
                 false,
                 Warning,
@@ -360,14 +395,14 @@ mod tests {
                 Some(2048),
                 Some(2048 * MIB + 1),
                 Warning,
-                Some("memory 2048 MB (warning > 2048 MB)"),
+                Some("memory 2048.1 MiB (warning > 2048 MiB)"),
             ),
             (
                 Expect::Active,
                 Some(100),
                 Some(300 * MIB),
                 Warning,
-                Some("memory 300 MB (warning > 100 MB)"),
+                Some("memory 300 MiB (warning > 100 MiB)"),
             ),
             (Expect::Running, None, Some(u64::MAX), Healthy, None),
             (Expect::Running, Some(1), None, Healthy, None),
@@ -394,7 +429,7 @@ mod tests {
             a.message.as_deref(),
             Some(
                 "activating (auto-restart); restarted in the last hour (4 since last manual \
-                 start); memory 300 MB (warning > 100 MB)"
+                 start); memory 300 MiB (warning > 100 MiB)"
             )
         );
 
@@ -410,22 +445,90 @@ mod tests {
         );
     }
 
+    /// A unit observation with a given restart count and run identity.
+    fn run(n: Option<u32>, invocation: &str, start: i64) -> UnitSnapshot {
+        UnitSnapshot {
+            n_restarts: n,
+            invocation_id: Some(invocation.into()),
+            exec_main_start_ts: Some(start),
+            ..unit("loaded", "active", "running")
+        }
+    }
+
     #[test]
     fn restart_tracker() {
         let mut t = RestartTracker::default();
-        t.observe(0, Some(3)); // baseline, not an increase
+        t.observe(0, &run(Some(3), "a", 0)); // baseline, not an increase
         assert!(!t.restarted_recently(0));
-        t.observe(30, None); // no data changes nothing
-        t.observe(60, Some(3));
+        t.observe(30, &run(None, "a", 0)); // no data changes nothing
+        t.observe(60, &run(Some(3), "a", 0));
         assert!(!t.restarted_recently(60));
-        t.observe(90, Some(4));
+        t.observe(90, &run(Some(4), "b", 85));
         assert!(t.restarted_recently(90));
         assert!(t.restarted_recently(90 + RESTART_WINDOW_S));
         assert!(!t.restarted_recently(91 + RESTART_WINDOW_S));
         // Manual restart resets the counter: a new baseline, the earlier increase still counts.
-        t.observe(120, Some(0));
+        t.observe(120, &run(Some(0), "c", 110));
         assert!(t.restarted_recently(120));
-        t.observe(200, Some(1));
+        t.observe(200, &run(Some(1), "d", 190));
         assert!(t.restarted_recently(200 + RESTART_WINDOW_S));
+    }
+
+    #[test]
+    fn restart_tracker_rows() {
+        // (previous, current, counted as a restart)
+        let cases = [
+            (
+                "same run, same count",
+                run(Some(2), "a", 0),
+                run(Some(2), "a", 0),
+                false,
+            ),
+            ("count up", run(Some(2), "a", 0), run(Some(3), "b", 5), true),
+            (
+                "manual restart only",
+                run(Some(2), "a", 0),
+                run(Some(0), "b", 5),
+                false,
+            ),
+            // Manual restart (reset to 0), then a crash and auto-restart, within one tick.
+            (
+                "reset then crash, lower",
+                run(Some(3), "a", 0),
+                run(Some(1), "b", 5),
+                true,
+            ),
+            (
+                "reset then crash, equal",
+                run(Some(1), "a", 0),
+                run(Some(1), "b", 5),
+                true,
+            ),
+            (
+                "new start time only",
+                run(Some(1), "a", 0),
+                run(Some(1), "a", 5),
+                true,
+            ),
+            (
+                "no restart count",
+                run(None, "a", 0),
+                run(Some(1), "b", 5),
+                false,
+            ),
+        ];
+        for (name, prev, cur, expected) in cases {
+            let mut t = RestartTracker::default();
+            t.observe(0, &prev);
+            t.observe(30, &cur);
+            assert_eq!(t.restarted_recently(30), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn memory_is_rounded_up_in_messages() {
+        assert_eq!(mib_rounded_up(2048 * MIB + 1), "2048.1");
+        assert_eq!(mib_rounded_up(300 * MIB), "300");
+        assert_eq!(mib_rounded_up(MIB + MIB / 2), "1.5");
     }
 }

@@ -34,26 +34,32 @@ pub struct SystemRates {
     pub net: Vec<NetRate>,
 }
 
-/// CPU usage between two readings of the same counters, or `None` if any counter went backwards
-/// or no time passed.
+/// CPU usage between two readings of the same counters, or `None` if the total went backwards (a
+/// reset) or no time passed.
+///
+/// Single fields are clamped instead: proc(5) documents that `iowait` can decrease, and per-CPU
+/// idle accounting under NO_HZ makes the aggregate idle/iowait dip by a few jiffies on ordinary
+/// hosts. Treating that as a reset would drop healthy samples (htop and node_exporter clamp too).
 pub fn cpu_usage(prev: &CpuTimes, cur: &CpuTimes) -> Option<CpuUsage> {
-    let fields = |t: &CpuTimes| {
-        [
-            t.user, t.nice, t.system, t.idle, t.iowait, t.irq, t.softirq, t.steal,
-        ]
-    };
-    if fields(cur).iter().zip(fields(prev)).any(|(c, p)| *c < p) {
+    if cur.total() <= prev.total() {
         return None;
     }
-    let total = cur.total() - prev.total();
-    if total == 0 {
+    let d = |c: u64, p: u64| c.saturating_sub(p) as f64;
+    let idle = d(cur.idle, prev.idle);
+    let iowait = d(cur.iowait, prev.iowait);
+    let busy = d(cur.user, prev.user)
+        + d(cur.nice, prev.nice)
+        + d(cur.system, prev.system)
+        + d(cur.irq, prev.irq)
+        + d(cur.softirq, prev.softirq)
+        + d(cur.steal, prev.steal);
+    // The sum of clamped deltas, not `cur.total() - prev.total()`, so the parts add up to 100%.
+    let total = busy + idle + iowait;
+    if total == 0.0 {
         return None;
     }
-    let idle = (cur.idle - prev.idle) as f64;
-    let iowait = (cur.iowait - prev.iowait) as f64;
-    let total = total as f64;
     Some(CpuUsage {
-        usage: pct(total - idle - iowait, total),
+        usage: pct(busy, total),
         iowait: pct(iowait, total),
     })
 }
@@ -163,7 +169,18 @@ mod tests {
             ("all iowait", times(100, 100, 700, 200), Some((0.0, 100.0))),
             ("no time passed", base, None),
             ("reset after reboot", times(5, 5, 50, 1), None),
-            ("one counter backwards", times(200, 200, 699, 200), None),
+            // Single-field dips are clamped to 0, not treated as a reset.
+            (
+                "idle dips by 1",
+                times(150, 150, 699, 100),
+                Some((100.0, 0.0)),
+            ),
+            (
+                "iowait dips by 1",
+                times(150, 100, 750, 99),
+                Some((50.0, 0.0)),
+            ),
+            ("total backwards", times(100, 100, 600, 100), None),
         ];
         for (name, cur, expected) in cases {
             let got = cpu_usage(&base, cur).map(|u| (u.usage, u.iowait));
