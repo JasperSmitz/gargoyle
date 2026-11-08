@@ -1,0 +1,49 @@
+{
+  "host": "debian-box",
+  "timer": {
+    "unit": "music-sync.timer",
+    "name": "Music sync",
+    "service": "music-sync.service",
+    "health": "critical",
+    "message": "last run failed: exit-code (status 1)",
+    "active": true,
+    "lastRun": {
+      "startedAt": 1794190000,
+      "finishedAt": 1794190042,
+      "duration": 42,
+      "result": "exit-code",
+      "exitStatus": 1
+    },
+    "nextRun": 1794276400,
+    "running": false
+  },
+  "runs": [
+    {
+      "startedAt": 1794190000,
+      "finishedAt": 1794190042,
+      "duration": 42,
+      "result": "exit-code",
+      "exitStatus": 1,
+      "source": "observed"
+    },
+    {
+      "startedAt": 1794103600,
+      "finishedAt": 1794103638,
+      "duration": 38,
+      "result": "success",
+      "exitStatus": 0,
+      "source": "journal"
+    }
+  ],
+  "events": [
+    {
+      "id": 812,
+      "ts": 1794190042,
+      "targetKind": "timer",
+      "target": "music-sync.timer",
+      "from": "healthy",
+      "to": "critical",
+      "message": "last run failed: exit-code (status 1)"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "host": "debian-box",
+  "series": [
+    {
+      "key": "cpu.usage",
+      "metric": "cpu.usage",
+      "label": null,
+      "unit": "percent"
+    },
+    {
+      "key": "load.1",
+      "metric": "load.1",
+      "label": null,
+      "unit": "load"
+    },
+    {
+      "key": "mem.used",
+      "metric": "mem.used",
+      "label": null,
+      "unit": "percent"
+    },
+    {
+      "key": "disk.used:/",
+      "metric": "disk.used",
+      "label": "/",
+      "unit": "percent"
+    },
+    {
+      "key": "net.rx:enp1s0",
+      "metric": "net.rx",
+      "label": "enp1s0",
+      "unit": "bytes_per_s"
+    },
+    {
+      "key": "temp:coretemp/Package id 0",
+      "metric": "temp",
+      "label": "coretemp/Package id 0",
+      "unit": "celsius"
+    },
+    {
+      "key": "check.latency:Music HTTP",
+      "metric": "check.latency",
+      "label": "Music HTTP",
+      "unit": "ms"
+    }
+  ]
+}

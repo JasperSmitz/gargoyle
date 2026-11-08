@@ -1,0 +1,32 @@
+{
+  "host": "debian-box",
+  "events": [
+    {
+      "id": 813,
+      "ts": 1794195000,
+      "targetKind": "service",
+      "target": "minecraft.service",
+      "from": "healthy",
+      "to": "critical",
+      "message": "unit failed (Result=exit-code)"
+    },
+    {
+      "id": 812,
+      "ts": 1794190042,
+      "targetKind": "timer",
+      "target": "music-sync.timer",
+      "from": "healthy",
+      "to": "critical",
+      "message": "last run failed: exit-code (status 1)"
+    },
+    {
+      "id": 811,
+      "ts": 1794185000,
+      "targetKind": "system",
+      "target": "disk:/",
+      "from": "healthy",
+      "to": "warning",
+      "message": "disk / at 84% (warning ≥ 80%)"
+    }
+  ]
+}

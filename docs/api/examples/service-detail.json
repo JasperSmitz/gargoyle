@@ -1,0 +1,27 @@
+{
+  "host": "debian-box",
+  "service": {
+    "unit": "minecraft.service",
+    "name": "Minecraft",
+    "description": "Minecraft Server",
+    "health": "critical",
+    "message": "unit failed (Result=exit-code)",
+    "loadState": "loaded",
+    "activeState": "failed",
+    "subState": "failed",
+    "since": 1794195000,
+    "restarts": 3,
+    "memory": null
+  },
+  "events": [
+    {
+      "id": 813,
+      "ts": 1794195000,
+      "targetKind": "service",
+      "target": "minecraft.service",
+      "from": "healthy",
+      "to": "critical",
+      "message": "unit failed (Result=exit-code)"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "host": "debian-box",
+  "checks": [
+    {
+      "name": "Music HTTP",
+      "kind": "http",
+      "target": "http://127.0.0.1:4533/ping",
+      "health": "healthy",
+      "message": null,
+      "lastCheck": 1794199980,
+      "latencyMs": 3.1,
+      "consecutiveFailures": 0
+    },
+    {
+      "name": "Game port",
+      "kind": "tcp",
+      "target": "127.0.0.1:25565",
+      "health": "warning",
+      "message": "connection refused (1 consecutive failure)",
+      "lastCheck": 1794199990,
+      "latencyMs": null,
+      "consecutiveFailures": 1
+    }
+  ]
+}

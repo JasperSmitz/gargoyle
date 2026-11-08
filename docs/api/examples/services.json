@@ -1,0 +1,31 @@
+{
+  "host": "debian-box",
+  "services": [
+    {
+      "unit": "navidrome.service",
+      "name": "Navidrome",
+      "description": "Navidrome Music Server",
+      "health": "healthy",
+      "message": null,
+      "loadState": "loaded",
+      "activeState": "active",
+      "subState": "running",
+      "since": 1794000000,
+      "restarts": 0,
+      "memory": 152000000
+    },
+    {
+      "unit": "minecraft.service",
+      "name": "Minecraft",
+      "description": "Minecraft Server",
+      "health": "critical",
+      "message": "unit failed (Result=exit-code)",
+      "loadState": "loaded",
+      "activeState": "failed",
+      "subState": "failed",
+      "since": 1794195000,
+      "restarts": 3,
+      "memory": null
+    }
+  ]
+}

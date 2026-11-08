@@ -1,0 +1,33 @@
+{
+  "host": "debian-box",
+  "timers": [
+    {
+      "unit": "music-sync.timer",
+      "name": "Music sync",
+      "service": "music-sync.service",
+      "health": "critical",
+      "message": "last run failed: exit-code (status 1)",
+      "active": true,
+      "lastRun": {
+        "startedAt": 1794190000,
+        "finishedAt": 1794190042,
+        "duration": 42,
+        "result": "exit-code",
+        "exitStatus": 1
+      },
+      "nextRun": 1794276400,
+      "running": false
+    },
+    {
+      "unit": "backup.timer",
+      "name": "backup.timer",
+      "service": "backup.service",
+      "health": "unknown",
+      "message": "never run",
+      "active": true,
+      "lastRun": null,
+      "nextRun": 1794210000,
+      "running": false
+    }
+  ]
+}

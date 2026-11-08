@@ -1,0 +1,24 @@
+{
+  "host": "debian-box",
+  "check": {
+    "name": "Game port",
+    "kind": "tcp",
+    "target": "127.0.0.1:25565",
+    "health": "warning",
+    "message": "connection refused (1 consecutive failure)",
+    "lastCheck": 1794199990,
+    "latencyMs": null,
+    "consecutiveFailures": 1
+  },
+  "events": [
+    {
+      "id": 814,
+      "ts": 1794199990,
+      "targetKind": "check",
+      "target": "Game port",
+      "from": "healthy",
+      "to": "warning",
+      "message": "connection refused (1 consecutive failure)"
+    }
+  ]
+}

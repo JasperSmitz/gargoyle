@@ -1,0 +1,174 @@
+{
+  "host": "debian-box",
+  "ts": 1794200000,
+  "health": "critical",
+  "hostInfo": {
+    "hostname": "debian-box",
+    "os": "Debian GNU/Linux 13 (trixie)",
+    "kernel": "6.12.0-1-amd64",
+    "cpuModel": "Intel(R) N100",
+    "cores": 4,
+    "bootTime": 1793500000,
+    "uptime": 700000
+  },
+  "system": {
+    "health": "warning",
+    "ts": 1794199995,
+    "cpu": {
+      "usage": 12.5,
+      "iowait": 0.4,
+      "health": "healthy"
+    },
+    "load": {
+      "one": 0.42,
+      "five": 0.38,
+      "fifteen": 0.31,
+      "health": "healthy"
+    },
+    "memory": {
+      "total": 16624951296,
+      "used": 4271000000,
+      "usedPct": 25.7,
+      "swapTotal": 1073741824,
+      "swapUsed": 0,
+      "health": "healthy"
+    },
+    "disks": [
+      {
+        "mount": "/",
+        "fsType": "ext4",
+        "total": 250000000000,
+        "used": 210000000000,
+        "usedPct": 84.0,
+        "health": "warning"
+      },
+      {
+        "mount": "/srv",
+        "fsType": "ext4",
+        "total": 2000000000000,
+        "used": 600000000000,
+        "usedPct": 30.0,
+        "health": "healthy"
+      }
+    ],
+    "net": [
+      {
+        "iface": "enp1s0",
+        "rxBps": 120400.0,
+        "txBps": 8800.0
+      }
+    ],
+    "temps": [
+      {
+        "label": "coretemp/Package id 0",
+        "celsius": 48.0,
+        "health": "healthy"
+      }
+    ]
+  },
+  "counts": {
+    "healthy": 2,
+    "warning": 1,
+    "critical": 2,
+    "unknown": 1
+  },
+  "services": [
+    {
+      "unit": "navidrome.service",
+      "name": "Navidrome",
+      "description": "Navidrome Music Server",
+      "health": "healthy",
+      "message": null,
+      "loadState": "loaded",
+      "activeState": "active",
+      "subState": "running",
+      "since": 1794000000,
+      "restarts": 0,
+      "memory": 152000000
+    },
+    {
+      "unit": "minecraft.service",
+      "name": "Minecraft",
+      "description": "Minecraft Server",
+      "health": "critical",
+      "message": "unit failed (Result=exit-code)",
+      "loadState": "loaded",
+      "activeState": "failed",
+      "subState": "failed",
+      "since": 1794195000,
+      "restarts": 3,
+      "memory": null
+    }
+  ],
+  "timers": [
+    {
+      "unit": "music-sync.timer",
+      "name": "Music sync",
+      "service": "music-sync.service",
+      "health": "critical",
+      "message": "last run failed: exit-code (status 1)",
+      "active": true,
+      "lastRun": {
+        "startedAt": 1794190000,
+        "finishedAt": 1794190042,
+        "duration": 42,
+        "result": "exit-code",
+        "exitStatus": 1
+      },
+      "nextRun": 1794276400,
+      "running": false
+    },
+    {
+      "unit": "backup.timer",
+      "name": "backup.timer",
+      "service": "backup.service",
+      "health": "unknown",
+      "message": "never run",
+      "active": true,
+      "lastRun": null,
+      "nextRun": 1794210000,
+      "running": false
+    }
+  ],
+  "checks": [
+    {
+      "name": "Music HTTP",
+      "kind": "http",
+      "target": "http://127.0.0.1:4533/ping",
+      "health": "healthy",
+      "message": null,
+      "lastCheck": 1794199980,
+      "latencyMs": 3.1,
+      "consecutiveFailures": 0
+    }
+  ],
+  "recentEvents": [
+    {
+      "id": 813,
+      "ts": 1794195000,
+      "targetKind": "service",
+      "target": "minecraft.service",
+      "from": "healthy",
+      "to": "critical",
+      "message": "unit failed (Result=exit-code)"
+    },
+    {
+      "id": 812,
+      "ts": 1794190042,
+      "targetKind": "timer",
+      "target": "music-sync.timer",
+      "from": "healthy",
+      "to": "critical",
+      "message": "last run failed: exit-code (status 1)"
+    },
+    {
+      "id": 811,
+      "ts": 1794185000,
+      "targetKind": "system",
+      "target": "disk:/",
+      "from": "healthy",
+      "to": "warning",
+      "message": "disk / at 84% (warning ≥ 80%)"
+    }
+  ]
+}
