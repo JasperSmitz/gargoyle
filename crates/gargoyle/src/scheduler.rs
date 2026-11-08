@@ -1,6 +1,6 @@
-//! Periodic work (ARCHITECTURE §3): the system tick, the unit tick, one tick per check and the
-//! maintenance tick, plus the one-off startup work: restoring state from storage and journal
-//! backfill.
+//! Periodic work (ARCHITECTURE §3): the system tick, the unit tick, one tick per check, the
+//! library tick (`crate::library`) and the maintenance tick, plus the one-off startup work:
+//! restoring state from storage and journal backfill.
 //!
 //! After each system, unit or check tick, the targets it covers are judged and every health
 //! transition is stored as an event (see `gargoyle_core::health::Transitions` for the rules). The
@@ -120,9 +120,10 @@ pub async fn restore(shared: &Shared) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Starts the system, unit, check and (with storage) maintenance loops. The system, unit and
-/// maintenance loops tick immediately, then every interval; the immediate maintenance tick catches
-/// up on rollups missed while stopped. Each check starts after its own [`check_jitter`].
+/// Starts the system, unit, check, library (with `[library]`) and (with storage) maintenance
+/// loops. The system, unit and maintenance loops tick immediately, then every interval; the
+/// immediate maintenance tick catches up on rollups missed while stopped. Each check starts after
+/// its own [`check_jitter`], the library 1s after startup.
 pub fn spawn(shared: &Shared) -> anyhow::Result<Vec<JoinHandle<()>>> {
     let c = &shared.config.collector;
     let mut loops = vec![
@@ -142,6 +143,7 @@ pub fn spawn(shared: &Shared) -> anyhow::Result<Vec<JoinHandle<()>>> {
             loops.push(spawn_check_loop(shared.clone(), prober.clone(), index));
         }
     }
+    loops.extend(crate::library::spawn(shared));
     Ok(loops)
 }
 
@@ -377,7 +379,7 @@ async fn store_runs(shared: &Shared, runs: Vec<TimerRunRecord>) {
 }
 
 /// Stores health transitions. A failed write loses those events (the live state is unaffected).
-async fn store_events(shared: &Shared, ts: i64, events: Vec<Transition>) {
+pub(crate) async fn store_events(shared: &Shared, ts: i64, events: Vec<Transition>) {
     for e in &events {
         tracing::info!(
             target_kind = ?e.kind,
@@ -455,7 +457,7 @@ pub fn call_limit(interval: Duration) -> Duration {
 /// Set while a call of one kind is running on the blocking pool, including after its caller gave
 /// up waiting.
 #[derive(Clone, Default)]
-struct Busy(Arc<AtomicBool>);
+pub(crate) struct Busy(Arc<AtomicBool>);
 
 /// Clears the [`Busy`] flag when the blocking call ends, however it ends.
 struct ClearOnDrop(Arc<AtomicBool>);
@@ -467,7 +469,7 @@ impl Drop for ClearOnDrop {
 }
 
 #[derive(Debug)]
-enum CallError {
+pub(crate) enum CallError {
     /// The previous call of this kind has not returned yet, so this tick was skipped. That call
     /// was given up on after the carried limit (calls of one kind are otherwise sequential).
     Busy(Duration),
@@ -492,7 +494,7 @@ impl fmt::Display for CallError {
 /// Runs a collector call on the blocking pool, waiting at most `limit`, unless the previous call
 /// guarded by `busy` is still running. A panic in the call becomes an error, so one bad sample
 /// does not take the loop down.
-async fn call<T, F>(busy: &Busy, limit: Duration, f: F) -> Result<T, CallError>
+pub(crate) async fn call<T, F>(busy: &Busy, limit: Duration, f: F) -> Result<T, CallError>
 where
     F: FnOnce() -> Result<T, CollectError> + Send + 'static,
     T: Send + 'static,

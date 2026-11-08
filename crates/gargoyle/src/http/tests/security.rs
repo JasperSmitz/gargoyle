@@ -283,9 +283,10 @@ async fn populated_shared() -> Shared {
 }
 
 /// M5.4 response audit. A config full of sensitive values (password hash, storage path,
-/// credentials in a check URL) is served with auth on; every API endpoint, including detail
-/// pages and error responses, is fetched, and no response may contain any of them, nor
-/// anything that looks like systemd command lines or environment.
+/// credentials in a check URL, the library report path) is served with auth on; every API
+/// endpoint, including detail pages and error responses, is fetched, and no response may contain
+/// any of them, nor anything that looks like systemd command lines or environment, nor the
+/// report's absolute `root` (M7).
 #[tokio::test]
 async fn no_api_response_contains_secrets_or_local_paths() {
     let dir = tempfile::Builder::new()
@@ -302,6 +303,19 @@ async fn no_api_response_contains_secrets_or_local_paths() {
     config.auth.mode = gargoyle_core::config::AuthMode::Basic;
     config.auth.password_hash = Some(hash.clone());
     config.storage.path = dir.path().join("audit.db");
+    // A valid report with a marker `root`, in a directory whose name is a marker too.
+    let report_dir = dir.path().join("audit-liner-dir");
+    std::fs::create_dir(&report_dir).unwrap();
+    let report_path = report_dir.join("audit-report.json");
+    let mut report: Value =
+        serde_json::from_str(include_str!("../../../../../config/liner-report.dev.json")).unwrap();
+    report["root"] = serde_json::json!("/srv/audit-root-marker");
+    std::fs::write(&report_path, report.to_string()).unwrap();
+    config
+        .library
+        .as_mut()
+        .expect("dev config has [library]")
+        .report = report_path.clone();
     let storage = crate::storage::Storage::open(&config.storage).unwrap();
     let mock = MockCollector::new(1);
     crate::storage::backfill_mock(&storage, &mock, now() - 20, 10).unwrap();
@@ -310,6 +324,9 @@ async fn no_api_response_contains_secrets_or_local_paths() {
     system_tick(shared.clone()).await;
     unit_tick(shared.clone()).await;
     unit_tick(shared.clone()).await;
+    let mut reader = crate::library::Reader::new(report_path.clone());
+    crate::library::tick(&shared, &mut reader).await;
+    crate::library::tick(&shared, &mut reader).await;
     let auth = Arc::new(
         Authenticator::new(&config.auth.username, &hash)
             .unwrap()
@@ -329,6 +346,8 @@ async fn no_api_response_contains_secrets_or_local_paths() {
         "/api/v1/metrics",
         "/api/v1/metrics/query?key=cpu.usage",
         "/api/v1/metrics/query?key=disk.used_pct:*",
+        "/api/v1/library",
+        "/api/v1/events?kind=library",
         // Error paths echo nothing from the request or the config.
         "/api/v1/nope",
         "/api/v1/services/unknown.service",
@@ -370,8 +389,11 @@ async fn no_api_response_contains_secrets_or_local_paths() {
     // The crawl reached real data.
     assert!(bodies.contains("navidrome.service"), "{bodies}");
     assert!(bodies.contains("\"http://127.0.0.1:9\""), "{bodies}");
+    assert!(bodies.contains("Sample Person/Field Notes"), "{bodies}");
+    assert!(bodies.contains("\"targetKind\":\"library\""), "{bodies}");
 
     let db_dir = dir.path().display().to_string();
+    let report_path = report_path.display().to_string();
     let forbidden = [
         hash.as_str(),
         "$argon2",
@@ -379,6 +401,10 @@ async fn no_api_response_contains_secrets_or_local_paths() {
         &db_dir,
         "gargoyle-audit-dbdir",
         "audit.db",
+        &report_path,
+        "audit-liner-dir",
+        "audit-report.json",
+        "audit-root-marker",
         "/etc/gargoyle",
         "gargoyle.toml",
         "audituser",

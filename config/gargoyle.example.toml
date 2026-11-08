@@ -134,3 +134,19 @@ temperature = { warning = 75.0, critical = 90.0 }                 # celsius
 # "tcp": connect to address (host:port) and close.
 # kind = "tcp"
 # address = "127.0.0.1:25565"
+
+# Optional: the music library's metadata health from the JSON report of Liner, a separate tool.
+# Gargoyle only reads the file; it never runs Liner (DEPLOYMENT.md, "Music library report (Liner)").
+# Without this section there is no Library page, card or target.
+# [library]
+# Required. Written by `liner scan --format json`; must be readable by the gargoyle user.
+# The path is never shown in the dashboard or API. Files over 32 MiB are refused.
+# report = "/var/lib/liner/report.json"
+# name = "Music library"
+# Warn when the report's generated_at is older than this (at least 1m).
+# max_age = "26h"
+# Lowest issue severity that warns: "error", "warning", "info" or "never" (age only).
+# Unreadable files warn too, except with "never". The library is never critical.
+# warn_on = "error"
+# How often the file is checked; it is read again only when it changed (at least 1s).
+# interval = "60s"

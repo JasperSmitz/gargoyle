@@ -4,6 +4,7 @@ mod auth;
 mod checks;
 mod hash_password;
 mod http;
+mod library;
 mod scheduler;
 mod state;
 mod storage;

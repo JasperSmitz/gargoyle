@@ -9,16 +9,18 @@
 use std::collections::HashMap;
 
 use gargoyle_core::api::{
-    CheckSummary, CpuSummary, DiskSummary, HostInfo as HostInfoDto, LoadSummary, MemorySummary,
-    NetSummary, Overview, ServiceSummary, SystemSummary, TargetKind, TempSummary, TimerSummary,
+    CheckSummary, CpuSummary, DiskSummary, HostInfo as HostInfoDto, LibraryReport, LibrarySummary,
+    LoadSummary, MemorySummary, NetSummary, Overview, ServiceSummary, SystemSummary, TargetKind,
+    TempSummary, TimerSummary,
 };
-use gargoyle_core::config::{CheckConfig, Config, ServiceConfig, TimerConfig};
+use gargoyle_core::config::{CheckConfig, Config, LibraryConfig, ServiceConfig, TimerConfig};
 use gargoyle_core::health::{
-    self, Assessment, CheckTracker, Health, ProbeOutcome, RestartTracker, SystemHealth, TimerRuns,
-    Transition, Transitions, Window, disk_used_pct, evaluate_check, evaluate_service,
-    evaluate_system, evaluate_timer, is_stale, load_per_core, memory_used_pct, run_of,
-    service_is_running, service_run, timer_service,
+    self, Assessment, CheckTracker, Health, LibraryStatus, ProbeOutcome, ReportFacts,
+    RestartTracker, SystemHealth, TimerRuns, Transition, Transitions, Window, disk_used_pct,
+    evaluate_check, evaluate_library, evaluate_service, evaluate_system, evaluate_timer, is_stale,
+    load_per_core, memory_used_pct, run_of, service_is_running, service_run, timer_service,
 };
+use gargoyle_core::liner::ReadFailure;
 use gargoyle_core::model::{HostInfo, SystemSnapshot, TimerRunRecord, UnitSnapshot};
 use gargoyle_core::rates::{CpuUsage, NetRate, system_rates};
 
@@ -26,6 +28,9 @@ use crate::storage::samples::{self, Sample};
 
 /// Shown as `host` until host info has been collected once.
 const UNKNOWN_HOST: &str = "unknown";
+
+/// The fixed target name of the music library in events (§6).
+pub const LIBRARY_TARGET: &str = "library";
 
 /// How far back journal backfill looks for a timer with no stored runs.
 pub const JOURNAL_BACKFILL_S: i64 = 30 * 86_400;
@@ -37,6 +42,7 @@ pub struct State {
     units: UnitState,
     /// Per configured check name.
     checks: HashMap<String, CheckTracker>,
+    library: LibraryState,
     transitions: Transitions,
     /// Per timer: start of the newest run stored before this process started, from where journal
     /// backfill continues. Captured at restore, before live runs are stored.
@@ -72,6 +78,43 @@ struct UnitState {
     error: Option<String>,
 }
 
+/// The last poll of the library report. Only used with `[library]`.
+#[derive(Debug, Default)]
+struct LibraryState {
+    /// When the last poll completed.
+    checked_at: Option<i64>,
+    /// `None` until the first read. A failed read drops the previous report (ADR 0007).
+    read: Option<Result<Box<LoadedReport>, ReadFailure>>,
+}
+
+/// A valid report, parsed once per change into the API view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedReport {
+    /// Unix seconds.
+    pub generated_at: i64,
+    pub view: LibraryReport,
+}
+
+impl LoadedReport {
+    fn facts(&self) -> ReportFacts {
+        let s = &self.view.summary;
+        ReportFacts {
+            generated_at: self.generated_at,
+            issue_counts: s.issue_counts,
+            unreadable_files: s.unreadable_files,
+            albums: s.albums,
+        }
+    }
+}
+
+/// The result of one poll of the library report.
+#[derive(Debug)]
+pub enum LibraryPoll {
+    /// The file has not changed since the last read; its outcome stands.
+    Unchanged,
+    Read(Result<Box<LoadedReport>, ReadFailure>),
+}
+
 impl State {
     pub fn new(config: &Config) -> Self {
         Self {
@@ -87,6 +130,7 @@ impl State {
             },
             units: UnitState::default(),
             checks: HashMap::new(),
+            library: LibraryState::default(),
             transitions: Transitions::default(),
             journal_since: HashMap::new(),
         }
@@ -157,6 +201,14 @@ impl State {
             .entry(name.to_owned())
             .or_default()
             .record(ts, outcome);
+    }
+
+    /// Records one completed poll of the library report at `ts`.
+    pub fn record_library(&mut self, ts: i64, poll: LibraryPoll) {
+        self.library.checked_at = Some(ts);
+        if let LibraryPoll::Read(read) = poll {
+            self.library.read = Some(read);
+        }
     }
 
     /// Stores the unit snapshots of one successful unit tick at `now`.
@@ -342,6 +394,61 @@ impl State {
         )
     }
 
+    /// The health of the library at `now`, for its transitions after each poll. `None` without
+    /// `[library]`.
+    pub fn library_target(
+        &self,
+        config: &Config,
+        now: i64,
+    ) -> Option<(TargetKind, String, Assessment)> {
+        let cfg = config.library.as_ref()?;
+        Some((
+            TargetKind::Library,
+            LIBRARY_TARGET.to_owned(),
+            self.library_assessment(cfg, now),
+        ))
+    }
+
+    fn library_assessment(&self, cfg: &LibraryConfig, now: i64) -> Assessment {
+        let l = &self.library;
+        let status = match &l.read {
+            None => LibraryStatus::NotRead,
+            Some(Err(failure)) => LibraryStatus::Failed(failure),
+            Some(Ok(report)) => LibraryStatus::Read(report.facts()),
+        };
+        evaluate_library(cfg, status, l.checked_at, now)
+    }
+
+    /// `overview.library` and `library` in `GET /library`; `None` without `[library]`. The age
+    /// is computed at `now`.
+    pub fn library_view(&self, config: &Config, now: i64) -> Option<LibrarySummary> {
+        let cfg = config.library.as_ref()?;
+        let a = self.library_assessment(cfg, now);
+        let facts = self.loaded_report().map(LoadedReport::facts);
+        Some(LibrarySummary {
+            name: cfg.name.clone(),
+            health: a.health,
+            message: a.message,
+            checked_at: self.library.checked_at,
+            generated_at: facts.map(|f| f.generated_at),
+            age: facts.map(|f| now.saturating_sub(f.generated_at).max(0)),
+            max_age: cfg.max_age.as_secs(),
+            warn_on: cfg.warn_on,
+            issue_counts: facts.map(|f| f.issue_counts),
+            unreadable_files: facts.map(|f| f.unreadable_files),
+            albums: facts.map(|f| f.albums),
+        })
+    }
+
+    /// The view of the last valid report, if the last read was one.
+    pub fn library_report(&self) -> Option<LibraryReport> {
+        self.loaded_report().map(|r| r.view.clone())
+    }
+
+    fn loaded_report(&self) -> Option<&LoadedReport> {
+        self.library.read.as_ref().and_then(|r| r.as_deref().ok())
+    }
+
     /// The `host` field of every response.
     pub fn host(&self) -> &str {
         self.host_info
@@ -354,10 +461,12 @@ impl State {
         let services = self.services_view(config, now);
         let timers = self.timers_view(config, now);
         let checks = self.checks_view(config, now);
+        let library = self.library_view(config, now);
         let parts: Vec<Health> = std::iter::once(system.health)
             .chain(services.iter().map(|s| s.health))
             .chain(timers.iter().map(|t| t.health))
             .chain(checks.iter().map(|c| c.health))
+            .chain(library.iter().map(|l| l.health))
             .collect();
         Overview {
             host: self.host().to_owned(),
@@ -369,7 +478,7 @@ impl State {
             services,
             timers,
             checks,
-            library: None,
+            library,
             // Events come from storage; the HTTP handler adds them.
             recent_events: Vec::new(),
         }

@@ -11,8 +11,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use gargoyle_core::api::{
-    ApiError, CheckDetail, CheckList, Event, EventList, HealthResponse, MetricList, MetricsQuery,
-    Overview, ServiceDetail, ServiceList, TargetKind, TimerDetail, TimerList, TimerRun,
+    ApiError, CheckDetail, CheckList, Event, EventList, HealthResponse, LibraryResponse,
+    MetricList, MetricsQuery, Overview, ServiceDetail, ServiceList, TargetKind, TimerDetail,
+    TimerList, TimerRun,
 };
 use gargoyle_core::config::is_valid_unit_name;
 
@@ -80,6 +81,7 @@ fn routes(shared: Shared) -> Router {
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/checks/{name}", get(check))
         .route("/api/v1/events", get(events))
+        .route("/api/v1/library", get(library))
         .route("/api/v1/metrics", get(metrics))
         .route("/api/v1/metrics/query", get(metrics_query))
         .route("/api", get(api_not_found))
@@ -241,6 +243,18 @@ async fn check(
     Json(detail).into_response()
 }
 
+/// `GET /library`: the library summary and the view of the last valid report, both read from
+/// `State` (requests never touch the file). Without `[library]`, `configured: false`.
+async fn library(AxumState(shared): AxumState<Shared>) -> Json<LibraryResponse> {
+    let now = now();
+    Json(shared.read(|s| LibraryResponse {
+        host: s.host().to_owned(),
+        configured: shared.config.library.is_some(),
+        library: s.library_view(&shared.config, now),
+        report: s.library_report(),
+    }))
+}
+
 /// `GET /events?since=..&until=..&kind=..&target=..&limit=..`: `since` inclusive, `until`
 /// exclusive, newest first. A client pages back with `until` = the oldest `ts` it received until a
 /// page is empty; pages hold whole seconds only (see `storage::history::events`), so nothing is
@@ -272,7 +286,7 @@ async fn events(
                     return error(
                         StatusCode::BAD_REQUEST,
                         "bad_request",
-                        "kind must be system, service, timer or check",
+                        "kind must be system, service, timer, check or library",
                     );
                 };
                 kind.replace(k).is_some()
@@ -313,6 +327,7 @@ fn parse_kind(value: &str) -> Option<TargetKind> {
         "service" => Some(TargetKind::Service),
         "timer" => Some(TargetKind::Timer),
         "check" => Some(TargetKind::Check),
+        "library" => Some(TargetKind::Library),
         _ => None,
     }
 }
@@ -480,6 +495,7 @@ mod tests {
     use crate::scheduler::{system_tick, unit_tick};
 
     mod checks;
+    mod library;
     mod security;
 
     const DEV_CONFIG: &str = include_str!("../../../config/gargoyle.dev.toml");
@@ -622,7 +638,14 @@ mod tests {
         let o = serde_json::from_value::<Overview>(body).unwrap();
         assert_eq!(o.timers.len(), 3);
         let total = o.counts.healthy + o.counts.warning + o.counts.critical + o.counts.unknown;
-        assert_eq!(total, 1 + 4 + 3 + 2, "system, services, timers and checks");
+        assert_eq!(
+            total,
+            1 + 4 + 3 + 2 + 1,
+            "system, services, timers, checks and the library"
+        );
+        // The library is configured but not read in this test.
+        let library = o.library.expect("configured in the dev config");
+        assert_eq!(library.health, Health::Unknown);
         // No probe has run in this test.
         assert!(o.checks.iter().all(|c| c.health == Health::Unknown));
         // backup-fail.service is critical from its first observation.

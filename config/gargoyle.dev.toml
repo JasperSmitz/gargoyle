@@ -59,3 +59,9 @@ kind = "tcp"
 address = "127.0.0.1:9"
 interval = "10s"
 timeout = "2s"
+
+# A synthetic Liner report (several albums, every severity, one library-wide issue and one
+# unreadable file). Its generated_at is in the past, so the library also shows the age warning.
+# Relative paths are relative to the working directory: `make dev` runs from the repo root.
+[library]
+report = "config/liner-report.dev.json"

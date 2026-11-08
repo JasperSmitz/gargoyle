@@ -1,0 +1,634 @@
+{
+  "schema_version": "1.0.0",
+  "tool": {
+    "name": "liner",
+    "version": "0.1.0"
+  },
+  "generated_at": "2026-11-01T03:15:00Z",
+  "root": "/srv/music",
+  "options": {
+    "min_severity": "info",
+    "follow_symlinks": false,
+    "include_hidden": false
+  },
+  "summary": {
+    "files_scanned": 25,
+    "audio_files": 19,
+    "unreadable_files": 1,
+    "albums": 6,
+    "issues_by_severity": {
+      "error": 2,
+      "warning": 5,
+      "info": 1
+    },
+    "issues_by_code": {
+      "duplicate-track-position": 1,
+      "inconsistent-tag-spelling": 1,
+      "inconsistent-year": 1,
+      "likely-missing-disc-numbers": 1,
+      "missing-album-artist": 1,
+      "missing-title": 1,
+      "split-album": 1,
+      "track-number-gap": 1
+    },
+    "issues_hidden": 0
+  },
+  "albums": [
+    {
+      "id": "Quiet Hours/Live",
+      "path": "Quiet Hours/Live",
+      "title": "Live",
+      "album_artist": "Quiet Hours",
+      "disc_count": 1,
+      "track_count": 2,
+      "discs": [
+        {
+          "number": 1,
+          "folder": null,
+          "tracks": [
+            {
+              "path": "Quiet Hours/Live/01 Opening.flac",
+              "format": "flac",
+              "title": "Opening",
+              "artist": "Quiet Hours",
+              "album": "Live",
+              "album_artist": "Quiet Hours",
+              "track_no": 1,
+              "track_total": 2,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 187000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "Quiet Hours/Live/02 Middle.flac",
+              "format": "flac",
+              "title": "Middle",
+              "artist": "Quiet Hours",
+              "album": "Live",
+              "album_artist": "Quiet Hours",
+              "track_no": 2,
+              "track_total": 2,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 194000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "Quiet Hours/Live (Bonus)",
+      "path": "Quiet Hours/Live (Bonus)",
+      "title": "Live",
+      "album_artist": "Quiet Hours",
+      "disc_count": 1,
+      "track_count": 1,
+      "discs": [
+        {
+          "number": 1,
+          "folder": null,
+          "tracks": [
+            {
+              "path": "Quiet Hours/Live (Bonus)/01 Encore.flac",
+              "format": "flac",
+              "title": "Encore",
+              "artist": "Quiet Hours",
+              "album": "Live",
+              "album_artist": "Quiet Hours",
+              "track_no": 3,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 201000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "Sample Person/Field Notes",
+      "path": "Sample Person/Field Notes",
+      "title": "Field Notes",
+      "album_artist": null,
+      "disc_count": 1,
+      "track_count": 4,
+      "discs": [
+        {
+          "number": 1,
+          "folder": null,
+          "tracks": [
+            {
+              "path": "Sample Person/Field Notes/01 Arrival.flac",
+              "format": "flac",
+              "title": "Arrival",
+              "artist": "Sample Person",
+              "album": "Field Notes",
+              "album_artist": null,
+              "track_no": 1,
+              "track_total": 4,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 187000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "Sample Person/Field Notes/02 Morning.flac",
+              "format": "flac",
+              "title": "Morning",
+              "artist": "Sample Person",
+              "album": "Field Notes",
+              "album_artist": null,
+              "track_no": 2,
+              "track_total": 4,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 194000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "Sample Person/Field Notes/02 Morning (1).flac",
+              "format": "flac",
+              "title": "Morning",
+              "artist": "Sample Person",
+              "album": "field notes ",
+              "album_artist": null,
+              "track_no": 2,
+              "track_total": 4,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 194000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "Sample Person/Field Notes/04 Leaving.flac",
+              "format": "flac",
+              "title": "Leaving",
+              "artist": "Sample Person",
+              "album": "Field Notes",
+              "album_artist": null,
+              "track_no": 4,
+              "track_total": 4,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 208000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "The Examples/Night Drive",
+      "path": "The Examples/Night Drive",
+      "title": "Night Drive",
+      "album_artist": "The Examples",
+      "disc_count": 1,
+      "track_count": 6,
+      "discs": [
+        {
+          "number": 1,
+          "folder": null,
+          "tracks": [
+            {
+              "path": "The Examples/Night Drive/01 Overture.flac",
+              "format": "flac",
+              "title": "Overture",
+              "artist": "The Examples",
+              "album": "Night Drive",
+              "album_artist": "The Examples",
+              "track_no": 1,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2019,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 187000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "The Examples/Night Drive/02 Highway.flac",
+              "format": "flac",
+              "title": "Highway",
+              "artist": "The Examples",
+              "album": "Night Drive",
+              "album_artist": "The Examples",
+              "track_no": 2,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2019,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 194000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "The Examples/Night Drive/03 Exit.flac",
+              "format": "flac",
+              "title": "Exit",
+              "artist": "The Examples",
+              "album": "Night Drive",
+              "album_artist": "The Examples",
+              "track_no": 3,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2019,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 201000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "The Examples/Night Drive/01 Ignition.flac",
+              "format": "flac",
+              "title": "Ignition",
+              "artist": "The Examples",
+              "album": "Night Drive",
+              "album_artist": "The Examples",
+              "track_no": 1,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 187000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "The Examples/Night Drive/02 Streetlights.flac",
+              "format": "flac",
+              "title": "Streetlights",
+              "artist": "The Examples",
+              "album": "Night Drive",
+              "album_artist": "The Examples",
+              "track_no": 2,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 194000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "The Examples/Night Drive/03 Home.flac",
+              "format": "flac",
+              "title": "Home",
+              "artist": "The Examples",
+              "album": "Night Drive",
+              "album_artist": "The Examples",
+              "track_no": 3,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 201000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "Tidy Artist/Clean Sheet",
+      "path": "Tidy Artist/Clean Sheet",
+      "title": "Clean Sheet",
+      "album_artist": "Tidy Artist",
+      "disc_count": 1,
+      "track_count": 2,
+      "discs": [
+        {
+          "number": 1,
+          "folder": null,
+          "tracks": [
+            {
+              "path": "Tidy Artist/Clean Sheet/01 First.flac",
+              "format": "flac",
+              "title": "First",
+              "artist": "Tidy Artist",
+              "album": "Clean Sheet",
+              "album_artist": "Tidy Artist",
+              "track_no": 1,
+              "track_total": 2,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 187000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            },
+            {
+              "path": "Tidy Artist/Clean Sheet/02 Second.flac",
+              "format": "flac",
+              "title": "Second",
+              "artist": "Tidy Artist",
+              "album": "Clean Sheet",
+              "album_artist": "Tidy Artist",
+              "track_no": 2,
+              "track_total": 2,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Ambient",
+              "compilation": false,
+              "duration_ms": 194000,
+              "tag_types": [
+                "vorbis-comments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "Various/Summer Mix",
+      "path": "Various/Summer Mix",
+      "title": "Summer Mix",
+      "album_artist": null,
+      "disc_count": 1,
+      "track_count": 3,
+      "discs": [
+        {
+          "number": 1,
+          "folder": null,
+          "tracks": [
+            {
+              "path": "Various/Summer Mix/01 Ann.mp3",
+              "format": "mp3",
+              "title": "Sunny",
+              "artist": "Ann",
+              "album": "Summer Mix",
+              "album_artist": null,
+              "track_no": 1,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Pop",
+              "compilation": false,
+              "duration_ms": 187000,
+              "tag_types": [
+                "id3v2"
+              ]
+            },
+            {
+              "path": "Various/Summer Mix/02 Bob.mp3",
+              "format": "mp3",
+              "title": "Breeze",
+              "artist": "Bob",
+              "album": "Summer Mix",
+              "album_artist": null,
+              "track_no": 2,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Pop",
+              "compilation": false,
+              "duration_ms": 194000,
+              "tag_types": [
+                "id3v2"
+              ]
+            },
+            {
+              "path": "Various/Summer Mix/03 Untitled.mp3",
+              "format": "mp3",
+              "title": null,
+              "artist": "Cleo",
+              "album": "Summer Mix",
+              "album_artist": null,
+              "track_no": 3,
+              "track_total": 3,
+              "disc_no": null,
+              "disc_total": null,
+              "year": 2021,
+              "genre": "Pop",
+              "compilation": false,
+              "duration_ms": 201000,
+              "tag_types": [
+                "id3v2"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "issues": [
+    {
+      "code": "duplicate-track-position",
+      "severity": "error",
+      "scope": "album",
+      "message": "Disc 1 track 2 appears in 2 files",
+      "album_id": "Sample Person/Field Notes",
+      "paths": [
+        "Sample Person/Field Notes/02 Morning (1).flac",
+        "Sample Person/Field Notes/02 Morning.flac"
+      ],
+      "details": {
+        "disc": 1,
+        "track": 2
+      }
+    },
+    {
+      "code": "inconsistent-tag-spelling",
+      "severity": "warning",
+      "scope": "album",
+      "message": "Album title is spelled 2 ways: 'Field Notes', 'field notes '",
+      "album_id": "Sample Person/Field Notes",
+      "paths": [
+        "Sample Person/Field Notes/01 Arrival.flac",
+        "Sample Person/Field Notes/02 Morning (1).flac",
+        "Sample Person/Field Notes/02 Morning.flac",
+        "Sample Person/Field Notes/04 Leaving.flac"
+      ],
+      "details": {
+        "tag": "album",
+        "values": [
+          "Field Notes",
+          "field notes "
+        ]
+      }
+    },
+    {
+      "code": "track-number-gap",
+      "severity": "warning",
+      "scope": "album",
+      "message": "Missing track 3 (track total 4)",
+      "album_id": "Sample Person/Field Notes",
+      "paths": [
+        "Sample Person/Field Notes/01 Arrival.flac",
+        "Sample Person/Field Notes/02 Morning (1).flac",
+        "Sample Person/Field Notes/02 Morning.flac",
+        "Sample Person/Field Notes/04 Leaving.flac"
+      ],
+      "details": {
+        "disc": 1,
+        "missing": [
+          3
+        ],
+        "total": 4
+      }
+    },
+    {
+      "code": "likely-missing-disc-numbers",
+      "severity": "error",
+      "scope": "album",
+      "message": "Track numbers 1, 2, 3 are each used by different tracks; probably 2 discs without disc numbers",
+      "album_id": "The Examples/Night Drive",
+      "paths": [
+        "The Examples/Night Drive/01 Ignition.flac",
+        "The Examples/Night Drive/01 Overture.flac",
+        "The Examples/Night Drive/02 Highway.flac",
+        "The Examples/Night Drive/02 Streetlights.flac",
+        "The Examples/Night Drive/03 Exit.flac",
+        "The Examples/Night Drive/03 Home.flac"
+      ],
+      "details": {
+        "tracks": [
+          1,
+          2,
+          3
+        ],
+        "discs": 2
+      }
+    },
+    {
+      "code": "inconsistent-year",
+      "severity": "info",
+      "scope": "album",
+      "message": "Tracks have 2 different years: 2019, 2021",
+      "album_id": "The Examples/Night Drive",
+      "paths": [
+        "The Examples/Night Drive/01 Ignition.flac",
+        "The Examples/Night Drive/01 Overture.flac",
+        "The Examples/Night Drive/02 Highway.flac",
+        "The Examples/Night Drive/02 Streetlights.flac",
+        "The Examples/Night Drive/03 Exit.flac",
+        "The Examples/Night Drive/03 Home.flac"
+      ],
+      "details": {
+        "years": [
+          2019,
+          2021
+        ]
+      }
+    },
+    {
+      "code": "missing-album-artist",
+      "severity": "warning",
+      "scope": "album",
+      "message": "Tracks have 3 different artists but no album artist",
+      "album_id": "Various/Summer Mix",
+      "paths": [
+        "Various/Summer Mix/01 Ann.mp3",
+        "Various/Summer Mix/02 Bob.mp3",
+        "Various/Summer Mix/03 Untitled.mp3"
+      ],
+      "details": {
+        "artists": [
+          "Ann",
+          "Bob",
+          "Cleo"
+        ]
+      }
+    },
+    {
+      "code": "missing-title",
+      "severity": "warning",
+      "scope": "file",
+      "message": "Track has no title",
+      "album_id": "Various/Summer Mix",
+      "paths": [
+        "Various/Summer Mix/03 Untitled.mp3"
+      ],
+      "details": {}
+    },
+    {
+      "code": "split-album",
+      "severity": "warning",
+      "scope": "library",
+      "message": "Album 'Live' by 'Quiet Hours' is split over 2 directories",
+      "album_id": null,
+      "paths": [
+        "Quiet Hours/Live (Bonus)/01 Encore.flac",
+        "Quiet Hours/Live/01 Opening.flac",
+        "Quiet Hours/Live/02 Middle.flac"
+      ],
+      "details": {
+        "album": "Live",
+        "album_artist": "Quiet Hours",
+        "directories": [
+          "Quiet Hours/Live",
+          "Quiet Hours/Live (Bonus)"
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "path": "Sample Person/Field Notes/05 Unfinished.flac",
+      "kind": "corrupt",
+      "message": "failed to parse Flac file: failed to fill whole buffer"
+    }
+  ]
+}
