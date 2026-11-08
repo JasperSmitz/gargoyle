@@ -21,8 +21,8 @@ the same change.
 | M2 History & charts | ✅ Done (2026-11-08) |
 | M3 Timers & events | ✅ Done (2026-11-08) |
 | M4 Checks & health polish | ✅ Done (2026-11-08) |
-| M5 Security hardening | 🚧 In progress |
-| M6 Packaging & docs | Planned |
+| M5 Security hardening | ✅ Done (2026-11-08) |
+| M6 Packaging & docs | 🚧 In progress |
 
 ---
 
@@ -245,12 +245,12 @@ each other.
 
 **Acceptance**
 
-- [ ] With auth on, every non-health route returns 401 without credentials, including static
+- [x] With auth on, every non-health route returns 401 without credentials, including static
       assets, and `WWW-Authenticate` is set. With correct credentials, polling does not run argon2
       on every request (test via counter or timing).
-- [ ] `POST`, `PUT` and `DELETE` on any path return 405.
-- [ ] Headers test passes for both API and UI responses.
-- [ ] Security review report has no unresolved high or medium findings.
+- [x] `POST`, `PUT` and `DELETE` on any path return 405.
+- [x] Headers test passes for both API and UI responses.
+- [x] Security review report has no unresolved high or medium findings.
 
 ---
 
