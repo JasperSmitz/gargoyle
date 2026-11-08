@@ -14,7 +14,7 @@ crates/gargoyle-collector/  Collector trait, LinuxCollector, MockCollector, pars
 crates/gargoyle/            binary: cli, scheduler, storage, checks, http, auth, embedded UI
 web/                        Svelte 5 + Vite + TS (pnpm); built into web/dist and embedded
 config/                     gargoyle.dev.toml (mock), gargoyle.example.toml (documented)
-docs/                       ARCHITECTURE, ROADMAP, decisions/ (ADRs), api/ (contract examples)
+docs/                       ARCHITECTURE, ROADMAP, decisions/ (ADRs), api/ (contract examples), ACCESSIBILITY, KNOWN_ISSUES
 packaging/                  systemd unit, deb metadata (M6)
 ```
 
