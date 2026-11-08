@@ -261,7 +261,7 @@ deployment.
 
 **Scope**
 
-- **M6.1** Release profile (LTO, strip, `panic = "abort"`). `make release` builds the frontend and
+- **M6.1** Release profile (LTO, strip; `panic = "unwind"` is kept deliberately, because collector-crash recovery and per-connection isolation depend on it). `make release` builds the frontend and
   then the binary, targeting `x86_64-unknown-linux-gnu`. Document glibc-compatibility caveats
   (Debian stable glibc vs Arch); a `musl` build option is acceptable if it is simple.
 - **M6.2** `packaging/gargoyle.service`, a hardened unit (§9.6), and `cargo-deb` metadata:

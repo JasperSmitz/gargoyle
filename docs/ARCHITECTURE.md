@@ -676,9 +676,14 @@ worst of its parts in this order.
      their mode.
    - Reading the journal of system units requires the `systemd-journal` group. This is optional,
      and only journal backfill needs it.
-   - The systemd unit is hardened: `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`,
-     `NoNewPrivileges=yes`, `StateDirectory=gargoyle`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`,
-     `CapabilityBoundingSet=` (empty), `SystemCallFilter=@system-service`.
+   - The systemd unit (`packaging/gargoyle.service`) is hardened: `ProtectSystem=strict`,
+     `ProtectHome=read-only` (so a separate `/home` partition stays visible to disk detection),
+     `PrivateTmp`, `PrivateDevices`, `NoNewPrivileges`, `StateDirectory=gargoyle` with
+     `StateDirectoryMode=0750`, `UMask=0027`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`,
+     empty `CapabilityBoundingSet=`, and `SystemCallFilter=@system-service ~@privileged`, among
+     others. `systemd-analyze security` exposure is 1.6. `PrivateUsers` and `ProtectProc` are
+     deliberately not set: they break D-Bus/journal access or `/proc` reads. The unit file
+     comments give the reasons.
 7. **Outbound probes.** Checks only reach targets written in the config file by the admin. They
    never follow redirects, never read or store response bodies, ignore proxy settings from the
    environment (so credentials in a URL go only to the target) and do not reuse connections.
