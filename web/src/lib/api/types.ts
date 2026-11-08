@@ -317,7 +317,10 @@ export interface LibraryIssue {
   scope: IssueScope;
   /** Plain text from Liner; never render as HTML. */
   message: string;
-  /** Relative to the library root, `/`-separated; at most 50. */
+  /**
+   * Relative to the library root, `/`-separated; at most 50, and fewer once the view's 2 MiB
+   * path budget is spent (`pathsTotal` still counts them all).
+   */
   paths: string[];
   pathsTotal: number;
 }

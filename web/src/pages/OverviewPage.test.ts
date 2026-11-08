@@ -324,6 +324,36 @@ describe('OverviewPage', () => {
     );
   });
 
+  it('shows chips only for non-zero counts, and "No issues" for a clean library', () => {
+    const someWarnings = structuredClone(example);
+    someWarnings.library = {
+      ...someWarnings.library!,
+      issueCounts: { error: 0, warning: 3, info: 0 },
+    };
+    const first = renderOverview(someWarnings);
+    const counts = within(section('Library')).getByRole('list', { name: 'Issues by severity' });
+    expect(
+      within(counts)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent?.trim()),
+    ).toEqual(['3 warnings']);
+    first.unmount();
+
+    const clean = structuredClone(example);
+    clean.library = {
+      ...clean.library!,
+      health: 'healthy',
+      message: null,
+      issueCounts: { error: 0, warning: 0, info: 0 },
+      unreadableFiles: 0,
+    };
+    renderOverview(clean);
+    const card = section('Library');
+    expect(within(card).queryByRole('list', { name: 'Issues by severity' })).toBeNull();
+    expect(within(card).getByText('No issues')).toBeTruthy();
+    expect(card.textContent).not.toMatch(/0 (errors|warnings|info)/);
+  });
+
   it('shows the reason and no counts when the library has no valid report', () => {
     const missing = structuredClone(example);
     missing.library = {

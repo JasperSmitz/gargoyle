@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   breakPoints,
+  MAX_BREAK_PARTS,
   PLACEHOLDER,
   formatBytes,
   formatCountdown,
@@ -179,5 +180,18 @@ describe('breakPoints', () => {
     expect(breakPoints('music-sync.timer')).toEqual(['music-', 'sync.', 'timer']);
     expect(breakPoints('plain')).toEqual(['plain']);
     expect(breakPoints('')).toEqual([]);
+    expect(breakPoints('a//b/')).toEqual(['a/', '/', 'b/']);
+  });
+
+  it('keeps a separator-heavy text to a bounded number of parts', () => {
+    const path = 'a/'.repeat(2_000_000);
+    const parts = breakPoints(path);
+    expect(parts).toHaveLength(MAX_BREAK_PARTS);
+    expect(parts.join('')).toBe(path);
+    expect(parts.slice(0, -1).every((p) => p === 'a/')).toBe(true);
+    // Exactly at the cap nothing is merged.
+    const exact = 'a/'.repeat(MAX_BREAK_PARTS);
+    expect(breakPoints(exact)).toHaveLength(MAX_BREAK_PARTS);
+    expect(breakPoints(exact).at(-1)).toBe('a/');
   });
 });

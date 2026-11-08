@@ -113,11 +113,29 @@ export function isTimestamp(ts: number | null): ts is number {
   return ts !== null && Number.isFinite(ts) && ts > 0;
 }
 
+const SEPARATORS = new Set(['/', '.', ':', '@', '_', '-']);
+
+/** The most parts `breakPoints` returns, so `<wbr>`s per text stay bounded. */
+export const MAX_BREAK_PARTS = 64;
+
 /**
  * Splits a URL, address or unit name after its natural separators (`/`, `.`, `:`, `@`, `-`, `_`)
  * so the parts can be joined with `<wbr>`: long targets then wrap between path segments instead
  * of mid-word. Joining the parts gives back the input exactly.
+ *
+ * At most `MAX_BREAK_PARTS` parts: the rest of the text is the last part, one text node that
+ * still wraps through `overflow-wrap: anywhere`. Report paths are data, and a path of a million
+ * slashes must not become a million elements.
  */
 export function breakPoints(text: string): string[] {
-  return text.split(/(?<=[/.:@_-])/).filter((part) => part !== '');
+  const parts: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length && parts.length < MAX_BREAK_PARTS - 1; i++) {
+    if (SEPARATORS.has(text.charAt(i))) {
+      parts.push(text.slice(start, i + 1));
+      start = i + 1;
+    }
+  }
+  if (start < text.length) parts.push(text.slice(start));
+  return parts;
 }
