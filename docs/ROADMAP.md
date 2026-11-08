@@ -23,7 +23,7 @@ the same change.
 | M4 Checks & health polish | ✅ Done (2026-11-08) |
 | M5 Security hardening | ✅ Done (2026-11-08) |
 | M6 Packaging & docs | ✅ Done, Debian install test pending (2026-11-08) |
-| M7 Music library report (Liner) | 🔵 M7.0–M7.4 done (2026-11-08); M7.5 review open |
+| M7 Music library report (Liner) | ✅ Done, server deployment pending (2026-11-08) |
 
 ---
 
@@ -419,8 +419,13 @@ page, and the overview refreshed now that it has a library card), `check-config`
 CONFIG.md and DEPLOYMENT.md `[library]` examples and each validation rule, a real `liner scan`
 report served end to end (unreadable file, rename, deletion, `chmod 000` and back), and the two
 Liner units verified with `systemd-analyze verify` on scratch copies (clean apart from
-`/usr/local/bin/liner` not existing on the dev box). One minor Library page issue went to
-KNOWN_ISSUES. The acceptance list below is left for the M7.5 review to tick.
+`/usr/local/bin/liner` not existing on the dev box). M7.5 is done: an independent review and a
+Codex second opinion (FAIL: parse-time memory amplification, per-string response caps, zero
+chips on the card, untested poll error paths, `<wbr>` DOM amplification), a fix round, a
+re-review (FAIL: page-wide `<wbr>` count, control-character escaping, album count) and a second
+fix round. The Library expand-all race found in M7.4 was reproduced in a test and fixed.
+The acceptance list below is ticked from those reviews; `make dev` itself was not run, the
+same dev config was checked on the embedded build.
 
 **Parallel.** M7.1 → M7.2 (backend developer) ∥ M7.3 (frontend developer), then M7.4, then
 M7.5. The frontend develops against the example JSON first and against `make dev` once M7.2
@@ -428,26 +433,26 @@ lands.
 
 **Acceptance**
 
-- [ ] Without `[library]`, nothing changes: no library in the overview (`library: null`,
+- [x] Without `[library]`, nothing changes: no library in the overview (`library: null`,
       counts unchanged), no nav entry, `/api/v1/library` answers `configured: false`, and no
       file is read.
-- [ ] `make dev` shows the Library nav entry, the overview card and the page with grouped,
+- [x] `make dev` shows the Library nav entry, the overview card and the page with grouped,
       filterable, collapsible issues from `config/liner-report.dev.json`.
-- [ ] Liner's golden report parses; a `1.7.0` report with unknown fields and codes parses; a
+- [x] Liner's golden report parses; a `1.7.0` report with unknown fields and codes parses; a
       `2.0.0` report is `unknown` with `unsupported Liner schema 2.0.0`.
-- [ ] Health is never `critical` (property or table test over all inputs), and every §8 library
+- [x] Health is never `critical` (property or table test over all inputs), and every §8 library
       rule and message format has a test row.
-- [ ] Replacing the report file (rename) is picked up within one `interval`; an unchanged file
+- [x] Replacing the report file (rename) is picked up within one `interval`; an unchanged file
       is not parsed again (test via a parse counter or equivalent); a deleted file turns the
       library `unknown` with `report not found` after the hold-down.
-- [ ] A report over 32 MiB is refused without being read into memory.
-- [ ] A library health change appears in `/events` and on the Events page with kind `library`,
+- [x] A report over 32 MiB is refused without being read into memory.
+- [x] A library health change appears in `/events` and on the Events page with kind `library`,
       once, and is not logged again after a restart.
-- [ ] Neither the configured report path nor the report's `root` appears in any API response
+- [x] Neither the configured report path nor the report's `root` appears in any API response
       (audit test).
-- [ ] The Library page works at 360px without horizontal scroll and passes the automated a11y
+- [x] The Library page works at 360px without horizontal scroll and passes the automated a11y
       and CSP tests; the bundle stays ≤ 150 KiB gzipped.
-- [ ] `make check` is green.
+- [x] `make check` is green.
 
 ---
 
