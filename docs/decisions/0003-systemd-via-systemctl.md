@@ -37,7 +37,8 @@ separated per unit, in a pure function.
 
 - Use `std::process::Command` with an argument vector, never `sh -c`.
 - The only verbs allowed are `show` (systemctl) and read flags (journalctl).
-- Unit names are regex-validated at config load and are always passed after `--`.
+- Unit names are regex-validated at config load. systemctl receives them after `--`; journalctl
+  receives a single `--unit=<name>` token. Neither can be parsed as an option.
 - A fixed property whitelist is defined in one place. `ExecStart*`, `Environment*` and similar
   properties are never requested.
 
