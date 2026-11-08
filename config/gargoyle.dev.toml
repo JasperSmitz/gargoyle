@@ -1,0 +1,39 @@
+# Development config: mock collector, localhost only, database under ./data (git-ignored).
+# Used by `make dev` and `cargo run -- --config config/gargoyle.dev.toml`.
+
+[server]
+listen = "127.0.0.1:9077"
+
+[storage]
+path = "./data/dev.db"
+
+[collector]
+mode = "mock"
+system_interval = "10s"
+units_interval = "30s"
+journal_backfill = false
+
+# The mock collector answers for any unit name; names containing "fail" are always failed.
+[[service]]
+unit = "navidrome.service"
+name = "Navidrome"
+memory_warning_mb = 2048
+
+[[service]]
+unit = "minecraft.service"
+name = "Minecraft"
+
+[[service]]
+unit = "nginx.service"
+
+[[service]]
+unit = "backup-fail.service"
+name = "Always failing (demo)"
+
+[[timer]]
+unit = "music-sync.timer"
+name = "Music sync"
+max_age = "26h"
+
+[[timer]]
+unit = "backup.timer"

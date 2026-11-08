@@ -1,0 +1,22 @@
+# Local development against the real host (`make run-local`): Linux collector, localhost only,
+# database under ./data (git-ignored). Gargoyle only reads; it never changes these units.
+
+[server]
+listen = "127.0.0.1:9077"
+
+[storage]
+path = "./data/local.db"
+
+[collector]
+mode = "linux"
+journal_backfill = false
+
+[[service]]
+unit = "NetworkManager.service"
+
+[[service]]
+unit = "sshd.service"
+
+# Deliberately missing: should show as critical "unit not found".
+[[service]]
+unit = "gargoyle-does-not-exist.service"
