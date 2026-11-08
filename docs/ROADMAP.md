@@ -20,8 +20,8 @@ the same change.
 | M1 Live dashboard | ✅ Done (2026-11-08) |
 | M2 History & charts | ✅ Done (2026-11-08) |
 | M3 Timers & events | ✅ Done (2026-11-08) |
-| M4 Checks & health polish | 🚧 In progress |
-| M5 Security hardening | Planned |
+| M4 Checks & health polish | ✅ Done (2026-11-08) |
+| M5 Security hardening | 🚧 In progress |
 | M6 Packaging & docs | Planned |
 
 ---
@@ -211,13 +211,13 @@ each other.
 
 **Acceptance**
 
-- [ ] A check against `127.0.0.1:9077/api/v1/health` is healthy. A TCP check to a closed port goes
+- [x] A check against `127.0.0.1:9077/api/v1/health` is healthy. A TCP check to a closed port goes
       warning → critical after 3 failures. Both of these are in `gargoyle.dev.toml`.
-- [ ] A URL configured with `user:pass@` and a `?token=` never appears in any API response
+- [x] A URL configured with `user:pass@` and a `?token=` never appears in any API response
       (test).
-- [ ] Making the collector fail (e.g. a fake systemctl that exits 1) turns the affected targets
+- [x] Making the collector fail (e.g. a fake systemctl that exits 1) turns the affected targets
       `unknown` with a message within 3 intervals.
-- [ ] Every non-healthy state in the UI shows its `message`.
+- [x] Every non-healthy state in the UI shows its `message`.
 
 ---
 
