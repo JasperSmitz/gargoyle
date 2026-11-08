@@ -296,6 +296,9 @@ dependencies = [
 [[package]]
 name = "gargoyle-collector"
 version = "0.1.0"
+dependencies = [
+ "gargoyle-core",
+]
 
 [[package]]
 name = "gargoyle-core"
