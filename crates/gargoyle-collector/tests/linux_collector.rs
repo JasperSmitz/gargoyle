@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use gargoyle_collector::linux::SYSTEMCTL_PROPERTIES;
+use gargoyle_collector::linux::{JOURNAL_FIELDS, SYSTEMCTL_PROPERTIES};
 use gargoyle_collector::{CollectError, Collector, LinuxCollector, UnitRequest};
 use gargoyle_core::config::SystemConfig;
 
@@ -17,6 +17,7 @@ fn collector(case: &str, system: SystemConfig) -> LinuxCollector {
     LinuxCollector {
         root: fixtures().join(case),
         systemctl: PathBuf::from("/nonexistent/systemctl"),
+        journalctl: PathBuf::from("/nonexistent/journalctl"),
         system,
     }
 }
@@ -281,6 +282,82 @@ fn unit_names_are_arguments_not_shell() {
     assert!(!Path::new("pwned").exists());
 }
 
+// --- journal ------------------------------------------------------------------------------------
+
+/// A fake `journalctl` that checks the fixed argument vector, logs it, and prints
+/// `fixtures/journal/handmade.json`.
+fn fake_journalctl(dir: &Path) -> PathBuf {
+    let script = format!(
+        r#"#!/bin/sh
+echo "$*" >> '{log}'
+[ "$1" = '--unit=backup.service' ] || {{ echo "bad unit: $1" >&2; exit 64; }}
+[ "$2 $3 $4" = '--output=json --since=@1794000000 --no-pager' ] || {{ echo "bad args: $*" >&2; exit 64; }}
+[ "$6" = '--output-fields={fields}' ] || {{ echo "bad fields: $6" >&2; exit 64; }}
+[ "$7" = '_PID=1' ] || exit 64
+cat '{fixture}'
+"#,
+        log = dir.join("calls.log").display(),
+        fields = JOURNAL_FIELDS.join(","),
+        fixture = fixtures().join("journal/handmade.json").display(),
+    );
+    write_script(dir, "journalctl", &script)
+}
+
+#[test]
+fn timer_history_through_fake_journalctl() {
+    let _turn = SCRIPTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut c = collector("debian-server", SystemConfig::default());
+    c.journalctl = fake_journalctl(dir.path());
+
+    let runs = c
+        .timer_history("backup.timer", "backup.service", 1_794_000_000)
+        .expect("history");
+    let results: Vec<_> = runs.iter().map(|r| r.result.as_deref()).collect();
+    assert_eq!(
+        results,
+        [Some("timeout"), Some("core-dump"), Some("success"), None]
+    );
+    assert!(runs.iter().all(|r| r.timer == "backup.timer"));
+    assert_eq!(calls(dir.path()).len(), 1);
+}
+
+#[test]
+fn timer_history_without_journal_access_is_empty() {
+    let _turn = SCRIPTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut c = collector("debian-server", SystemConfig::default());
+    c.journalctl = write_script(
+        dir.path(),
+        "journalctl",
+        "#!/bin/sh\necho 'No journal files were opened due to insufficient permissions.' >&2\nexit 1\n",
+    );
+    for _ in 0..2 {
+        assert_eq!(c.timer_history("a.timer", "a.service", 0), Ok(Vec::new()));
+    }
+    // Not installed at all.
+    c.journalctl = dir.path().join("not-installed");
+    assert_eq!(c.timer_history("a.timer", "a.service", 0), Ok(Vec::new()));
+}
+
+#[test]
+fn timer_history_refuses_invalid_service_names() {
+    let _turn = SCRIPTS.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut c = collector("debian-server", SystemConfig::default());
+    c.journalctl = fake_journalctl(dir.path());
+    for bad in ["x.service; touch pwned", "*.service", "a.timer", "--help"] {
+        assert!(
+            matches!(
+                c.timer_history("a.timer", bad, 0),
+                Err(CollectError::Command { .. })
+            ),
+            "{bad}"
+        );
+    }
+    assert!(calls(dir.path()).is_empty(), "journalctl never ran");
+}
+
 // --- live host (make test-live) -----------------------------------------------------------------
 
 #[test]
@@ -308,4 +385,15 @@ fn live_host() {
     assert_eq!(snaps.len(), 2);
     assert_eq!(snaps[0].active_state, "active");
     assert_eq!(snaps[1].load_state, "not-found");
+
+    // Works with or without journal access; with access, runs are well-formed.
+    let since = info.boot_time - 30 * 86_400;
+    let runs = c
+        .timer_history("shadow.timer", "shadow.service", since)
+        .expect("history");
+    for r in &runs {
+        assert!(r.started_at >= since, "{r:?}");
+        assert!(r.finished_at.is_none_or(|f| f >= r.started_at), "{r:?}");
+        assert!(r.invocation_id.is_some());
+    }
 }

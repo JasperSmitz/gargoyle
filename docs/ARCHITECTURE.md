@@ -140,7 +140,7 @@ pub struct UnitSnapshot {              // whitelisted systemd properties only, s
 }
 ```
 
-**`LinuxCollector { root: PathBuf, systemctl: PathBuf }`**
+**`LinuxCollector { root: PathBuf, systemctl: PathBuf, journalctl: PathBuf, system: SystemConfig }`**
 
 - `root` defaults to `/`. Tests point it at `tests/fixtures/<case>/`, which contains fake `proc/` and
   `sys/` trees. Parsers are pure functions over `&str` and are unit-tested against fixture files.
@@ -164,9 +164,17 @@ pub struct UnitSnapshot {              // whitelisted systemd properties only, s
   For each timer, the triggered service (`Unit=` property, or the timer name with `.service`) is
   added to the same call.
   ([ADR 0003](decisions/0003-systemd-via-systemctl.md))
-- Journal backfill uses `journalctl -u <service> -o json --since @<ts> --output-fields=...` with
-  fixed fields. It is optional; if journal access is denied, the collector logs one warning and
-  returns an empty list.
+- Journal backfill (`timer_history`) runs
+  ```
+  journalctl --unit=<service> --output=json --since=@<ts> --no-pager --lines=5000 \
+             --output-fields=<fixed list> _PID=1 MESSAGE_ID=<id>...
+  ```
+  so only PID 1's unit lifecycle messages for that service come back (never `MESSAGE` or the
+  service's own output). Runs are rebuilt per `INVOCATION_ID`; the message IDs and fields are
+  documented in `crates/gargoyle-collector/src/linux/journal.rs`. Each call is bounded: killed after
+  10s, at most 5000 entries and 8 MiB of output. The scheduler's timeout around it should be at
+  least 10s. It is optional; if there is no journal or access is denied, the collector logs one
+  warning per process and returns an empty list.
 
 **`MockCollector { seed: u64 }`** (`collector.mode = "mock"`) is deterministic and needs no root,
 systemd or Linux paths.
@@ -505,8 +513,9 @@ worst of its parts in this order.
 1. **Read-only by construction.** There are no mutating endpoints and no `POST` routes, and the
    router only registers GET handlers. Gargoyle never calls `systemctl` verbs other than `show` and
    never calls `journalctl` with anything except read flags. Neither the config nor the API can
-   cause command execution. Command arguments are fixed vectors, unit names are validated with a
-   regex, and the `--` separator is always passed before unit names.
+   cause command execution. Command arguments are fixed vectors and unit names are validated with a
+   regex. `systemctl` gets the `--` separator before unit names; `journalctl` gets the unit as the
+   single token `--unit=<name>`. Both keep a name from being read as an option.
 2. **Localhost by default.** The default listen address is `127.0.0.1:9077`. Binding a non-loopback
    address without auth is refused at startup unless explicitly overridden.
 3. **Auth (optional).** HTTP Basic auth checks the password against an argon2id hash. A successful

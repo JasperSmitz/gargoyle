@@ -6,7 +6,9 @@
 //! state. Given the same seed and the same sequence of sample times, the output is identical.
 //!
 //! Unit states are derived from a hash of the unit name only, so a given name always shows the
-//! same state; names containing `fail` are always failed.
+//! same state; names containing `fail` are always failed. Timers run on a schedule derived from
+//! their name (see `Schedule`); `units_at` and `timer_history_at` describe the same runs, and a
+//! `*-quick.timer` alternates failed and successful runs every 2 minutes for demos.
 
 use std::f64::consts::TAU;
 use std::sync::{Mutex, PoisonError};
@@ -14,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     CollectError, Collector, CpuCounters, CpuTimes, DiskUsage, HostInfo, MemoryInfo, NetCounters,
-    SystemSnapshot, TempReading, UnitRequest, UnitSnapshot,
+    SystemSnapshot, TempReading, TimerRunRecord, UnitRequest, UnitSnapshot,
 };
 
 const CORES: usize = 4;
@@ -28,6 +30,11 @@ const GIB: u64 = 1 << 30;
 const MIB: u64 = 1 << 20;
 const HOUR: f64 = 3600.0;
 const DAY: f64 = 24.0 * HOUR;
+/// Period of `*-quick.timer` demo timers.
+const QUICK_PERIOD_S: i64 = 120;
+/// [`MockCollector::timer_history_at`] returns at most this many (newest) runs, like the journal
+/// backfill's entry cap.
+const MAX_HISTORY_RUNS: i64 = 1000;
 
 /// Mean CPU usage (percent) and network rates (bytes/s) used for gap filling.
 const AVG_CPU_PCT: f64 = 18.0;
@@ -298,58 +305,181 @@ impl MockCollector {
         }
     }
 
-    /// A timer and its service. Runs are periodic (hourly, 6-hourly or daily, by name hash); one in
-    /// ten runs fails, and every run of a timer whose name contains `fail` fails.
-    fn timer(&self, timer: &str, service: &str, now: i64) -> (UnitSnapshot, UnitSnapshot) {
+    /// Past and current runs of `timer` whose start is at or after `since` (and after boot), as
+    /// the journal would report them at `now`: oldest first, at most [`MAX_HISTORY_RUNS`] (the
+    /// newest), the run in progress unfinished. Consistent with [`Self::units_at`].
+    pub fn timer_history_at(
+        &self,
+        timer: &str,
+        service: &str,
+        since: i64,
+        now: i64,
+    ) -> Vec<TimerRunRecord> {
+        let schedule = Schedule::of(timer);
+        let current = schedule.index_at(now);
+        let first = schedule
+            .index_at(since.max(self.boot_time) - 1)
+            .saturating_add(1)
+            .max(current.saturating_sub(MAX_HISTORY_RUNS - 1));
+        (first..=current)
+            .map(|i| self.timer_run(timer, &schedule, i))
+            .filter(|run| run.start <= now)
+            .map(|run| {
+                let finished = run.end() <= now;
+                TimerRunRecord {
+                    timer: timer.into(),
+                    service: service.into(),
+                    invocation_id: Some(run.invocation_id.clone()),
+                    started_at: run.start,
+                    finished_at: finished.then(|| run.end()),
+                    result: finished.then(|| run.result().into()),
+                    exit_status: finished.then_some(run.exit_status),
+                }
+            })
+            .collect()
+    }
+
+    /// Run `index` of `timer`. Every run gets its own invocation ID and a slightly different
+    /// duration. One in ten runs fails at random; see [`Schedule`] for the fixed rules.
+    fn timer_run(&self, timer: &str, schedule: &Schedule, index: i64) -> MockRun {
         let h = fnv1a(timer);
-        let period = [3600, 6 * 3600, 86_400][(h % 3) as usize];
-        let offset = (h % period as u64) as i64;
-        let run = (now - offset).div_euclid(period);
-        let last = run * period + offset;
-        let duration = 20 + (h % 60) as i64;
-        let fails = timer.contains("fail") || mix(h ^ self.seed, run as u64) % 10 == 0;
-        let running = now < last + duration;
+        let r = mix(h ^ self.seed, index as u64);
+        let fails = match schedule.kind {
+            TimerKind::AlwaysFails => true,
+            TimerKind::Alternating => index.rem_euclid(2) == 0,
+            TimerKind::Normal => r % 10 == 0,
+        };
+        MockRun {
+            start: schedule.start(index),
+            duration: schedule.duration + ((r >> 8) % 10) as i64,
+            fails,
+            exit_status: if fails { 1 + ((r >> 16) % 2) as i32 } else { 0 },
+            invocation_id: format!("{:016x}{:016x}", mix(h, index as u64), h),
+        }
+    }
+
+    /// A timer and its service at `now`. The service is `activating` while a run is in progress,
+    /// otherwise `failed` or `inactive` with the last run's result.
+    fn timer(&self, timer: &str, service: &str, now: i64) -> (UnitSnapshot, UnitSnapshot) {
+        let schedule = Schedule::of(timer);
+        let index = schedule.index_at(now);
+        let run = self.timer_run(timer, &schedule, index);
+        let h = fnv1a(timer);
 
         let timer_snap = UnitSnapshot {
             description: describe(timer),
             active_enter_ts: Some(self.boot_time + 5),
-            last_trigger_ts: Some(last),
-            next_elapse_ts: Some(last + period),
+            last_trigger_ts: Some(run.start),
+            next_elapse_ts: Some(schedule.start(index + 1)),
             trigger_unit: Some(service.into()),
             ..unit_snapshot(timer, "loaded", "active", "waiting")
         };
         let base = UnitSnapshot {
             description: describe(service),
-            invocation_id: Some(format!("{:016x}{:016x}", mix(h, run as u64), h)),
-            exec_main_start_ts: Some(last),
+            invocation_id: Some(run.invocation_id.clone()),
+            exec_main_start_ts: Some(run.start),
             n_restarts: Some(0),
             ..unit_snapshot(service, "loaded", "inactive", "dead")
         };
-        let service_snap = if running {
+        let service_snap = if now < run.end() {
             UnitSnapshot {
                 active_state: "activating".into(),
                 sub_state: "start".into(),
                 memory_current: Some((32 + h % 200) * MIB),
                 ..base
             }
-        } else if fails {
-            UnitSnapshot {
-                active_state: "failed".into(),
-                sub_state: "failed".into(),
-                result: Some("exit-code".into()),
-                exec_main_status: Some(1),
-                exec_main_exit_ts: Some(last + duration),
-                ..base
-            }
         } else {
+            let (active, sub) = if run.fails {
+                ("failed", "failed")
+            } else {
+                ("inactive", "dead")
+            };
             UnitSnapshot {
-                result: Some("success".into()),
-                exec_main_status: Some(0),
-                exec_main_exit_ts: Some(last + duration),
+                active_state: active.into(),
+                sub_state: sub.into(),
+                result: Some(run.result().into()),
+                exec_main_status: Some(run.exit_status),
+                exec_main_exit_ts: Some(run.end()),
                 ..base
             }
         };
         (timer_snap, service_snap)
+    }
+}
+
+/// When a mock timer fires and how its runs end, derived from its name:
+///
+/// - `*-quick.timer`: every 2 minutes, runs ~20s, and alternates failed → success, so a failed
+///   run turning `critical` and the next success returning `healthy` can be watched live.
+/// - names containing `fail`: every run fails (period by hash as below).
+/// - otherwise hourly, 6-hourly or daily by name hash, runs 20–90s, one in ten runs fails.
+#[derive(Debug, Clone, Copy)]
+struct Schedule {
+    period: i64,
+    offset: i64,
+    /// Base duration; each run adds 0–9s.
+    duration: i64,
+    kind: TimerKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimerKind {
+    Normal,
+    AlwaysFails,
+    Alternating,
+}
+
+impl Schedule {
+    fn of(timer: &str) -> Self {
+        let h = fnv1a(timer);
+        let kind = if timer.contains("fail") {
+            TimerKind::AlwaysFails
+        } else if timer.ends_with("-quick.timer") {
+            TimerKind::Alternating
+        } else {
+            TimerKind::Normal
+        };
+        let (period, duration) = if timer.ends_with("-quick.timer") {
+            (QUICK_PERIOD_S, 15)
+        } else {
+            (
+                [3600, 6 * 3600, 86_400][(h % 3) as usize],
+                20 + (h % 60) as i64,
+            )
+        };
+        Self {
+            period,
+            offset: (h % period as u64) as i64,
+            duration,
+            kind,
+        }
+    }
+
+    /// Index of the last run started at or before `t`.
+    fn index_at(&self, t: i64) -> i64 {
+        (t - self.offset).div_euclid(self.period)
+    }
+
+    fn start(&self, index: i64) -> i64 {
+        index * self.period + self.offset
+    }
+}
+
+struct MockRun {
+    start: i64,
+    duration: i64,
+    fails: bool,
+    exit_status: i32,
+    invocation_id: String,
+}
+
+impl MockRun {
+    fn end(&self) -> i64 {
+        self.start + self.duration
+    }
+
+    fn result(&self) -> &'static str {
+        if self.fails { "exit-code" } else { "success" }
     }
 }
 
@@ -371,6 +501,15 @@ impl Collector for MockCollector {
 
     fn units(&self, units: &[UnitRequest]) -> Result<Vec<UnitSnapshot>, CollectError> {
         Ok(self.units_at(units, now()))
+    }
+
+    fn timer_history(
+        &self,
+        timer: &str,
+        service: &str,
+        since: i64,
+    ) -> Result<Vec<TimerRunRecord>, CollectError> {
+        Ok(self.timer_history_at(timer, service, since, now()))
     }
 }
 
@@ -751,5 +890,168 @@ mod tests {
         let after = m.units_at(&[req("nightly-fail.timer")], last + 120);
         assert_eq!(after[1].active_state, "failed");
         assert_eq!(after[1].result.as_deref(), Some("exit-code"));
+    }
+
+    fn service_at(m: &MockCollector, timer: &str, t: i64) -> UnitSnapshot {
+        m.units_at(&[req(timer)], t).remove(1)
+    }
+
+    #[test]
+    fn quick_timer_alternates_failed_and_success_every_two_minutes() {
+        let m = mock();
+        let timer = "demo-quick.timer";
+        let first = m.units_at(&[req(timer)], T0)[0]
+            .next_elapse_ts
+            .expect("scheduled");
+        let mut results = Vec::new();
+        for i in 0..6 {
+            let start = first + i * QUICK_PERIOD_S;
+            let timer_snap = &m.units_at(&[req(timer)], start)[0];
+            assert_eq!(timer_snap.last_trigger_ts, Some(start));
+            assert_eq!(timer_snap.next_elapse_ts, Some(start + QUICK_PERIOD_S));
+            // Finished well before the next run.
+            let svc = service_at(&m, timer, start + 60);
+            results.push((svc.result.clone(), svc.exec_main_status));
+            assert_eq!(
+                svc.active_state,
+                if svc.result.as_deref() == Some("success") {
+                    "inactive"
+                } else {
+                    "failed"
+                }
+            );
+        }
+        for pair in results.windows(2) {
+            assert_ne!(pair[0].0, pair[1].0, "{results:?}");
+        }
+        assert!(
+            results
+                .iter()
+                .any(|(r, s)| r.as_deref() == Some("exit-code") && *s != Some(0))
+        );
+        assert!(results.contains(&(Some("success".into()), Some(0))));
+    }
+
+    #[test]
+    fn running_service_is_activating_with_a_new_invocation() {
+        let m = mock();
+        let timer = "demo-quick.timer";
+        let start = m.units_at(&[req(timer)], T0)[0]
+            .next_elapse_ts
+            .expect("scheduled");
+        let before = service_at(&m, timer, start - 1);
+        let running = service_at(&m, timer, start + 1);
+        let after = service_at(&m, timer, start + 60);
+
+        assert_eq!(running.active_state, "activating");
+        assert_eq!(running.sub_state, "start");
+        assert_eq!(running.exec_main_start_ts, Some(start));
+        assert_eq!(running.exec_main_exit_ts, None);
+        assert!(running.invocation_id.is_some());
+        assert_ne!(running.invocation_id, before.invocation_id);
+        assert_eq!(running.invocation_id, after.invocation_id);
+        assert_eq!(after.exec_main_start_ts, Some(start));
+        assert!(after.exec_main_exit_ts.is_some_and(|e| e > start));
+    }
+
+    #[test]
+    fn history_matches_units_at() {
+        let m = mock();
+        for timer in ["demo-quick.timer", "music-sync.timer", "nightly-fail.timer"] {
+            for k in 0..200 {
+                let t = T0 + k * 37;
+                let svc = service_at(&m, timer, t);
+                let history = m.timer_history_at(timer, "svc.service", T0 - 3 * 86_400, t);
+                let last = history.last().expect("runs in three days");
+                assert_eq!(last.invocation_id, svc.invocation_id, "{timer} at {t}");
+                assert_eq!(Some(last.started_at), svc.exec_main_start_ts);
+                assert_eq!(last.finished_at, svc.exec_main_exit_ts);
+                assert_eq!(last.result, svc.result);
+                assert_eq!(last.exit_status, svc.exec_main_status);
+                assert_eq!(last.service, "svc.service");
+                assert_eq!(last.timer, timer);
+            }
+        }
+    }
+
+    #[test]
+    fn history_window_order_and_ids() {
+        let m = mock();
+        let timer = "demo-quick.timer";
+        let now = T0 + 3600;
+        let since = now - 1800;
+        let runs = m.timer_history_at(timer, "demo-quick.service", since, now);
+        assert!((14..=16).contains(&runs.len()), "{}", runs.len());
+        assert!(
+            runs.iter()
+                .all(|r| r.started_at >= since && r.started_at <= now)
+        );
+        assert!(
+            runs.windows(2)
+                .all(|w| w[1].started_at - w[0].started_at == QUICK_PERIOD_S)
+        );
+        let mut ids: Vec<_> = runs.iter().map(|r| r.invocation_id.clone()).collect();
+        ids.dedup();
+        assert_eq!(ids.len(), runs.len(), "a new invocation ID per run");
+        // Only the newest run can be unfinished, and every finished run has a duration.
+        for r in &runs[..runs.len() - 1] {
+            let f = r.finished_at.expect("finished");
+            assert!((15..25).contains(&(f - r.started_at)), "{r:?}");
+        }
+        // A window starting exactly at a run includes it.
+        let exact = m.timer_history_at(timer, "s", runs[3].started_at, now);
+        assert_eq!(exact[0].started_at, runs[3].started_at);
+        assert!(m.timer_history_at(timer, "s", now + 10, now).is_empty());
+    }
+
+    #[test]
+    fn history_starts_at_boot_and_is_capped() {
+        let m = mock();
+        let runs = m.timer_history_at("demo-quick.timer", "s", 0, BOOT + 600);
+        assert!(runs.first().is_some_and(|r| r.started_at >= BOOT));
+        let runs = m.timer_history_at("demo-quick.timer", "s", 0, BOOT + 7 * 86_400);
+        assert_eq!(runs.len(), MAX_HISTORY_RUNS as usize);
+        assert!(
+            runs.last()
+                .is_some_and(|r| r.started_at > BOOT + 7 * 86_400 - 120)
+        );
+    }
+
+    #[test]
+    fn history_failures() {
+        let m = mock();
+        let fail = m.timer_history_at("nightly-fail.timer", "s", T0 - 7 * 86_400, T0);
+        assert!(!fail.is_empty());
+        assert!(
+            fail.iter()
+                .filter(|r| r.finished_at.is_some())
+                .all(|r| r.result.as_deref() == Some("exit-code")
+                    && r.exit_status.is_some_and(|s| s > 0))
+        );
+        let hourly: Vec<_> = (0..50)
+            .flat_map(|i| m.timer_history_at(&format!("t{i}.timer"), "s", T0 - 7 * 86_400, T0))
+            .filter(|r| r.finished_at.is_some())
+            .collect();
+        let failed = hourly
+            .iter()
+            .filter(|r| r.result.as_deref() == Some("exit-code"))
+            .count();
+        let share = failed as f64 / hourly.len() as f64;
+        assert!((0.03..0.2).contains(&share), "{failed} of {}", hourly.len());
+        assert!(
+            hourly
+                .iter()
+                .filter(|r| r.result.as_deref() == Some("success"))
+                .all(|r| r.exit_status == Some(0))
+        );
+    }
+
+    #[test]
+    fn collector_trait_returns_history() {
+        let m = MockCollector::new(3);
+        let runs = m
+            .timer_history("demo-quick.timer", "demo-quick.service", now() - 3600)
+            .expect("mock never fails");
+        assert!((29..=31).contains(&runs.len()), "{}", runs.len());
     }
 }
