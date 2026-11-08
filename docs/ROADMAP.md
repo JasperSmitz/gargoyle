@@ -17,8 +17,8 @@ the same change.
 | Milestone | Status |
 |---|---|
 | M0 Foundation | ✅ Done (2026-11-08) |
-| M1 Live dashboard | 🚧 In progress |
-| M2 History & charts | Planned |
+| M1 Live dashboard | ✅ Done (2026-11-08) |
+| M2 History & charts | 🚧 In progress |
 | M3 Timers & events | Planned |
 | M4 Checks & health polish | Planned |
 | M5 Security hardening | Planned |
@@ -101,15 +101,15 @@ with both the mock collector and the real Linux collector. There is no history y
 
 **Acceptance**
 
-- [ ] `make dev` (mock): the dashboard at the Vite URL shows changing CPU and memory values and
+- [x] `make dev` (mock): the dashboard at the Vite URL shows changing CPU and memory values and
       services in at least three different health states. It updates without reload.
-- [ ] `make run-local` (Linux collector on the Arch dev box, configured with e.g.
+- [x] `make run-local` (Linux collector on the Arch dev box, configured with e.g.
       `NetworkManager.service`, `sshd.service` and one non-existent unit) shows real values. The
       non-existent unit is `critical` with message "unit not found".
-- [ ] A release build (`make build`) produces one binary that serves the dashboard with no
+- [x] A release build (`make build`) produces one binary that serves the dashboard with no
       `web/` directory present.
-- [ ] The overview layout works at 360px width with no horizontal scroll, and at desktop width.
-- [ ] Health rule unit tests cover every row of the §8 table for system and services.
+- [x] The overview layout works at 360px width with no horizontal scroll, and at desktop width.
+- [x] Health rule unit tests cover every row of the §8 table for system and services.
 
 ---
 
