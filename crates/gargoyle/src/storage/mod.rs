@@ -41,15 +41,58 @@ struct Inner {
     retention: Retention,
 }
 
+/// History is not secret (§9.4) but is nobody else's business: what Gargoyle creates is
+/// readable by its own user and group only. Existing files and directories keep the mode the
+/// admin gave them.
+const DIR_MODE: u32 = 0o750;
+const FILE_MODE: u32 = 0o640;
+
+/// Creates `dir` and missing parents with [`DIR_MODE`]; the leaf is set explicitly so the
+/// process umask cannot widen it.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    if dir.exists() {
+        return Ok(());
+    }
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(DIR_MODE)
+        .create(dir)?;
+    set_mode(dir, DIR_MODE)
+}
+
+/// Creates an empty database file with [`FILE_MODE`] (SQLite accepts an empty file as a new
+/// database). Returns whether it was created here.
+fn create_private_file(path: &Path) -> std::io::Result<bool> {
+    use std::os::unix::fs::OpenOptionsExt;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(FILE_MODE)
+        .open(path)
+    {
+        Ok(_) => set_mode(path, FILE_MODE).map(|()| true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+}
+
 impl Storage {
     /// Opens (creating if needed) the database and its parent directory, and migrates it.
     /// Blocking.
     pub fn open(config: &StorageConfig) -> anyhow::Result<Self> {
         let path = &config.path;
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir)
+            create_private_dir(dir)
                 .with_context(|| format!("cannot create database directory {}", dir.display()))?;
         }
+        let created = create_private_file(path)
+            .with_context(|| format!("cannot create database {}", path.display()))?;
         let open = |p: &Path| -> rusqlite::Result<(Writer, Connection)> {
             let writer = Writer::new(schema::open_writer(p)?)?;
             // Opened after the writer, which creates the file and the schema.
@@ -58,6 +101,19 @@ impl Storage {
         };
         let (writer, reader) =
             open(path).with_context(|| format!("cannot open database {}", path.display()))?;
+        if created {
+            // SQLite gives its -wal and -shm files the database file's mode, but set them
+            // explicitly in case a version does not.
+            for suffix in ["-wal", "-shm"] {
+                let mut side = path.as_os_str().to_owned();
+                side.push(suffix);
+                let side = std::path::PathBuf::from(side);
+                if side.exists() {
+                    set_mode(&side, FILE_MODE)
+                        .with_context(|| format!("cannot restrict {}", side.display()))?;
+                }
+            }
+        }
         tracing::info!(path = %path.display(), "database opened");
         Ok(Self {
             inner: Arc::new(Inner {

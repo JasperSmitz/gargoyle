@@ -1,6 +1,7 @@
 //! HTTP layer: the `/api/v1` routes and the embedded UI.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use axum::extract::rejection::{PathRejection, QueryRejection};
@@ -15,19 +16,30 @@ use gargoyle_core::api::{
 };
 use gargoyle_core::config::is_valid_unit_name;
 
+use crate::auth::{self, Authenticator};
 use crate::scheduler::{Shared, now};
 use crate::storage::{EventFilter, NativeIntervals, QueryError, QueryRequest};
 use crate::ui;
 
-pub async fn serve(listen: SocketAddr, shared: Shared) -> anyhow::Result<()> {
+mod hardening;
+mod server;
+
+pub async fn serve(
+    listen: SocketAddr,
+    shared: Shared,
+    auth: Option<Arc<Authenticator>>,
+) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("cannot listen on {listen}"))?;
     tracing::info!(%listen, version = env!("CARGO_PKG_VERSION"), "gargoyle listening");
-    axum::serve(listener, router(shared))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("HTTP server failed")?;
+    server::serve(
+        listener,
+        app(shared, auth),
+        server::LIMITS,
+        shutdown_signal(),
+    )
+    .await;
     tracing::info!("shut down");
     Ok(())
 }
@@ -42,8 +54,22 @@ const RUNS_MAX: i64 = 500;
 const DETAIL_EVENTS: i64 = 50;
 const RECENT_EVENTS: i64 = 10;
 
-/// Only GET routes are registered, so every other method gets 405 (axum answers HEAD via GET).
-pub fn router(shared: Shared) -> Router {
+/// The full application: routes, auth (when configured) and the hardening layers. Auth sits
+/// inside the hardening layers, so a 401 also gets the security headers.
+pub fn app(shared: Shared, auth: Option<Arc<Authenticator>>) -> Router {
+    let mut routes = routes(shared);
+    if let Some(auth) = auth {
+        routes = routes.layer(axum::middleware::from_fn_with_state(
+            auth,
+            auth::require_auth,
+        ));
+    }
+    hardening::apply(routes)
+}
+
+/// The routes alone. Only GET routes are registered (axum answers HEAD via GET); other methods
+/// are refused with 405 by [`hardening`] before they reach these.
+fn routes(shared: Shared) -> Router {
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/overview", get(overview))
@@ -70,9 +96,9 @@ pub fn router(shared: Shared) -> Router {
 pub fn mock_router() -> Router {
     let shared = Shared::new(
         gargoyle_core::config::Config::default(),
-        std::sync::Arc::new(gargoyle_collector::MockCollector::new(1)),
+        Arc::new(gargoyle_collector::MockCollector::new(1)),
     );
-    router(shared)
+    app(shared, None)
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -454,8 +480,14 @@ mod tests {
     use crate::scheduler::{system_tick, unit_tick};
 
     mod checks;
+    mod security;
 
     const DEV_CONFIG: &str = include_str!("../../../config/gargoyle.dev.toml");
+
+    /// The whole application without auth, as served.
+    fn router(shared: Shared) -> Router {
+        app(shared, None)
+    }
 
     fn shared() -> Shared {
         let config = Config::from_toml_str(DEV_CONFIG).unwrap();

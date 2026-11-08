@@ -60,15 +60,15 @@ unless one of these reasons applies.
 
 | Purpose | Crate | Notes |
 |---|---|---|
-| Async runtime / HTTP | `tokio`, `axum`, `tower-http` (compression, headers) | Standard, stable stack |
+| Async runtime / HTTP | `tokio`, `axum`, `hyper` + `hyper-util` (HTTP/1 server loop with timeouts, §9.5) | Standard, stable stack; hyper is axum's own server |
 | Storage | `rusqlite` (`bundled`) | Synchronous; called through `spawn_blocking` ([ADR 0002](decisions/0002-storage-sqlite-rusqlite.md)) |
 | Config | `serde`, `toml`, `humantime-serde` | Durations written as `"30s"` or `"48h"` |
 | CLI / logging | `clap` (derive), `tracing`, `tracing-subscriber` | Logs go to stderr, which journald captures |
 | Errors | `thiserror` (libraries), `anyhow` (binary) | |
-| Filesystem stats | `rustix` (`fs` feature, `statvfs`) | Avoids unsafe FFI |
+| Filesystem stats / TTY | `rustix` (`fs`, `termios`) | Avoids unsafe FFI; `termios` turns off echo for `hash-password` |
 | HTTP checks | `reqwest` 0.12 (`default-features = false`, `rustls-tls`) | Only for `[[check]]` probes |
 | UI embedding | `rust-embed` | [ADR 0004](decisions/0004-embed-frontend-single-binary.md) |
-| Password hashing | `argon2` | [ADR 0005](decisions/0005-auth-and-exposure.md) |
+| Password hashing / auth | `argon2`, `sha2`, `subtle`, `base64ct` | [ADR 0005](decisions/0005-auth-and-exposure.md); SHA-256 credential cache key, constant-time compare, Basic header decoding (all RustCrypto, already transitive deps) |
 | Frontend | `svelte@5`, `vite`, `typescript`, `uplot` | [ADR 0001](decisions/0001-rust-backend-svelte-frontend.md) |
 
 Avoid adding dependencies beyond these without a short justification in the PR or task report.
@@ -294,7 +294,8 @@ The API rules apply to every endpoint:
 - Health is one of `"healthy" | "warning" | "critical" | "unknown"`.
 - Errors use `{ "error": { "code": "not_found", "message": "..." } }` with the matching 4xx/5xx
   status. Codes: `not_found` (404), `bad_request` (400), `unknown_series` (400, an exact metric
-  key with no stored series), `unavailable` (503, no history storage), `internal` (500).
+  key with no stored series), `unavailable` (503, no history storage, or a request
+  timeout), `unauthorized` (401, §9.3), `internal` (500).
 - Every top-level response includes `"host": "<hostname>"`. This is reserved for multi-host (§10).
 - Optional fields are always present as `null`, never omitted.
 - List endpoints wrap their items in an object: `{ "host", "<items>": [...] }`.
@@ -596,12 +597,34 @@ worst of its parts in this order.
    single token `--unit=<name>`. Both keep a name from being read as an option.
 2. **Localhost by default.** The default listen address is `127.0.0.1:9077`. Binding a non-loopback
    address without auth is refused at startup unless explicitly overridden.
-3. **Auth (optional).** HTTP Basic auth checks the password against an argon2id hash. A successful
-   check is cached in memory as the SHA-256 of the presented header, so argon2 does not run on every
-   poll. The cache is cleared on restart. Failed attempts get a 1s delay, and comparisons are
-   constant-time. `/api/v1/health` is exempt. TLS is provided by a reverse proxy (Caddy or nginx) or
-   a private network (Tailscale or WireGuard); Gargoyle does not terminate TLS.
+3. **Auth (optional).** HTTP Basic auth checks the password against an argon2id hash, read from
+   `password_hash` or once at startup from `password_hash_file` (trimmed; a warning is logged if
+   the file is world-readable). A bad hash or unreadable file is a startup error.
    ([ADR 0005](decisions/0005-auth-and-exposure.md))
+   - Every route except `/api/v1/health` requires it: API, UI, static assets and unknown paths.
+     Without valid credentials the answer is `401` with
+     `WWW-Authenticate: Basic realm="Gargoyle", charset="UTF-8"` and the `unauthorized` error
+     body (§6), on UI paths too.
+   - A successful check is cached in memory as the SHA-256 of the presented `Authorization`
+     header, so argon2 does not run on every poll. The cache holds at most 16 entries (it is
+     cleared when full) and is cleared on restart.
+   - At most 2 argon2 verifications run at once, on the blocking pool. A verification keeps its
+     permit until argon2 finishes, even if the client disconnects or the request times out, so
+     wrong passwords can cost at most two cores and two hashes' memory. At most 2 more requests
+     wait for a permit; beyond that a request is refused (401) without running argon2.
+   - Failed verifications draw on a global budget: a burst of 20, refilled at 10 per second.
+     While it is spent, every header not in the cache is refused (401) without running argon2,
+     which caps online guessing at about 10 per second (~860 000 per day) however many
+     connections an attacker uses. A logged-in browser keeps working from the cache. **Use a
+     long random password** (e.g. 20+ characters from a password manager): that rate is no
+     threat to it, and is to a short one.
+   - Wrong credentials are answered after a 1s delay (`tokio::time::sleep`, the runtime is not
+     blocked). A request with no `Authorization` header, or one refused as above, gets its 401
+     at once: the browser prompt appears without delay, and a flood holds no extra connections.
+   - The user name is compared in constant time (as SHA-256 digests), and argon2 runs even when
+     the user name is wrong. The header and the hash are never logged.
+   - TLS is provided by a reverse proxy (Caddy or nginx) or a private network (Tailscale or
+     WireGuard); Gargoyle does not terminate TLS.
 4. **No secrets in responses.**
    - Only whitelisted systemd properties are fetched. `ExecStart`, `Environment`, `EnvironmentFiles`
      and similar are **never** fetched.
@@ -611,11 +634,46 @@ worst of its parts in this order.
      kind, never from the client's error text, which contains the URL.
    - Config values such as the password hash and paths are never serialized into the API.
    - Error messages returned to clients are generic. Details go only to the log.
-5. **Headers.**
-   - The CSP is `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'`.
-   - `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, no CORS.
+   - A response audit test (M5.4) crawls every endpoint, with and without credentials, against a
+     config holding a password hash, a storage path and check URL credentials, and asserts none
+     of them, nor `ExecStart`/`Environment`-like data, appears. The property whitelist lives in
+     one const (`gargoyle_collector::linux::SYSTEMCTL_PROPERTIES`); a test asserts it is the only
+     property list passed to `systemctl` anywhere in the code.
+5. **Headers and request limits.** One middleware stack wraps every response: API, UI, errors,
+   `401`, `405` and timeouts.
+   - The CSP is `default-src 'self'; img-src 'self' data:; frame-ancestors 'none';
+     base-uri 'none'; form-action 'none'; object-src 'none'`. Scripts and styles fall back to
+     `'self'`: nothing inline. `data:` images are the health favicons. The UI must set styles only
+     through the CSSOM (Svelte `style:` directives, uPlot), which CSP allows; a static
+     `style="..."` attribute in markup would be blocked. Verified in headless Chromium (M5.3).
+   - `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
+     `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`, a
+     `Permissions-Policy` denying camera, microphone, geolocation, payment and USB, and no CORS.
+   - `/api` responses get `Cache-Control: no-store`; the UI keeps its own policy (§6).
+   - Methods other than GET and HEAD get `405` with `Allow: GET, HEAD` on every path, before
+     routing and before auth.
+   - A request that announces a body (`Content-Length` other than 0, or `Transfer-Encoding`)
+     gets `413`; no endpoint reads one.
+   - A request taking longer than 30s is answered with `503` `unavailable` ("request timed out").
+   - Connections are served by Gargoyle's own HTTP/1 loop (hyper with a timer; `axum::serve`
+     has none). A request's headers must be complete within 10s of it starting, which also closes
+     a kept-alive connection after 10s idle; this defeats slowloris. Request line plus headers
+     are limited to 64 KiB (`431` beyond), and at most 100 headers.
+   - At most 256 connections are open at once; further ones wait in the kernel's accept queue.
+     This keeps a connection flood well below the default open-file limit (1024), so the
+     collector and SQLite never run out of file descriptors.
+   - On shutdown, in-flight responses get 5s to finish; connections still busy then (such as a
+     client that never reads) are dropped, so a stop never hangs.
+   - hyper answers some malformed requests itself, before the middleware: `400` for a bad
+     request line and `431` for oversized headers. These carry no security headers, but their
+     bodies are empty.
+   - A client that sends requests but never reads the responses keeps its connection slot
+     (there is no write timeout); see KNOWN_ISSUES. A buffering reverse proxy absorbs this.
 6. **Least privilege.**
    - Gargoyle runs as the dedicated system user `gargoyle`. It does not need root.
+   - The database directory, when Gargoyle creates it, is `0750`, and a database it creates
+     (with its `-wal` and `-shm` files) is `0640`, regardless of the umask. Existing files keep
+     their mode.
    - Reading the journal of system units requires the `systemd-journal` group. This is optional,
      and only journal backfill needs it.
    - The systemd unit is hardened: `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`,

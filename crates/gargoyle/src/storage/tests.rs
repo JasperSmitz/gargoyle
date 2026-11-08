@@ -546,3 +546,45 @@ async fn step_floor_follows_the_slowest_queried_series() {
     assert_eq!(step(&["cpu.usage", "service.restarts:a.service"]).await, 30);
     assert_eq!(step(&["check.latency:web"]).await, 60);
 }
+
+fn mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// M5.5 #6: what Gargoyle creates is not world-readable, whatever the umask.
+#[test]
+fn created_files_are_private() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(&dir);
+    let storage = Storage::open(&config).unwrap();
+    let db = &config.path;
+    assert_eq!(mode(db.parent().unwrap()), 0o750);
+    assert_eq!(mode(db), 0o640);
+    for suffix in ["-wal", "-shm"] {
+        let side = std::path::PathBuf::from(format!("{}{suffix}", db.display()));
+        assert!(side.exists(), "{} exists while open", side.display());
+        assert_eq!(mode(&side), 0o640, "{}", side.display());
+    }
+    drop(storage);
+    // Reopening keeps them as they are.
+    drop(Storage::open(&config).unwrap());
+    assert_eq!(mode(db), 0o640);
+}
+
+#[test]
+fn existing_files_keep_their_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("g.db");
+    std::fs::write(&db, b"").unwrap();
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let before = mode(dir.path());
+    let config = StorageConfig {
+        path: db.clone(),
+        ..StorageConfig::default()
+    };
+    drop(Storage::open(&config).unwrap());
+    assert_eq!(mode(&db), 0o600);
+    assert_eq!(mode(dir.path()), before);
+}

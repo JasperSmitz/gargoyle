@@ -18,7 +18,17 @@ default, while still letting the owner reach it remotely.
     This fits a read-only, GET-only app.
   - Successful verification is cached (SHA-256 of the header value, kept in memory) so 10s polling
     does not run argon2 on every request.
-  - Failures get a 1s delay.
+  - Failures get a 1s delay. At most two argon2 verifications run at once (and at most two
+    wait), so a flood of wrong passwords cannot use argon2 to burn every core or exhaust memory,
+    even with clients that disconnect mid-check (M5.1, M5.5). A request without credentials gets
+    its 401 at once, so the browser prompt is not delayed.
+  - The 1s delay is per request and does not limit the guessing rate by itself. A global budget
+    of failed verifications (burst 20, 10/s) does: beyond it, uncached credentials are refused
+    without argon2. The admin is told to use a long random password, against which ~10 guesses
+    per second is harmless. The cost: during an attack, a new login (not an open browser) can be
+    refused until the attack stops.
+  - Every other route needs auth, including static assets and unknown paths, so nothing about the
+    deployment is visible before login.
   - `/api/v1/health` stays open for uptime probes and reveals nothing beyond the version.
 - **No built-in TLS.** Basic auth over plain HTTP outside localhost is only acceptable on a VPN. The
   documented setup for internet exposure is Caddy or nginx with TLS in front. This avoids
