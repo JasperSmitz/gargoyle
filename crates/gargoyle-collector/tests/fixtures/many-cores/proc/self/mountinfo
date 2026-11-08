@@ -1,0 +1,3 @@
+21 1 9:0 / / rw,relatime shared:1 - xfs /dev/md0 rw
+22 21 0:20 / /proc rw,relatime shared:12 - proc proc rw
+40 21 9:1 / /data\040set\011two\134x rw,relatime shared:30 - xfs /dev/md1 rw

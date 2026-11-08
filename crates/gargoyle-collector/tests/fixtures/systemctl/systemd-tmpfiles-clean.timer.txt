@@ -1,0 +1,12 @@
+Id=systemd-tmpfiles-clean.timer
+Names=systemd-tmpfiles-clean.timer
+Description=Daily Cleanup of Temporary Directories
+LoadState=loaded
+ActiveState=active
+SubState=waiting
+ActiveEnterTimestamp=@1793997236
+InvocationID=3d84051ce97549d6ab7e29cc794f9885
+Unit=systemd-tmpfiles-clean.service
+NextElapseUSecRealtime=
+LastTriggerUSec=@1793998146
+Result=success

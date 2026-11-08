@@ -1,0 +1,14 @@
+Id=dbus-broker.service
+Names=dbus-broker.service dbus.service
+Description=D-Bus System Message Bus
+LoadState=loaded
+ActiveState=active
+SubState=running
+ActiveEnterTimestamp=@1793997236
+InvocationID=5ca2cde0447a4cc0889f5a07ff9bcc98
+Result=success
+NRestarts=0
+ExecMainStartTimestamp=@1793997236
+ExecMainExitTimestamp=
+ExecMainStatus=0
+MemoryCurrent=4222976

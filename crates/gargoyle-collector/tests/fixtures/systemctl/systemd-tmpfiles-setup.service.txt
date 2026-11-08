@@ -1,0 +1,14 @@
+Id=systemd-tmpfiles-setup.service
+Names=systemd-tmpfiles-setup.service
+Description=Create System Files and Directories
+LoadState=loaded
+ActiveState=active
+SubState=exited
+ActiveEnterTimestamp=@1793997235
+InvocationID=27bef3ed66864d139e519963d74eddd1
+Result=success
+NRestarts=0
+ExecMainStartTimestamp=@1793997235
+ExecMainExitTimestamp=@1793997235
+ExecMainStatus=0
+MemoryCurrent=[not set]

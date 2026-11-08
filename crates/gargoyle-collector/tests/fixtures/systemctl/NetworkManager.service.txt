@@ -1,0 +1,14 @@
+Id=NetworkManager.service
+Names=NetworkManager.service
+Description=Network Manager
+LoadState=loaded
+ActiveState=active
+SubState=running
+ActiveEnterTimestamp=@1793997238
+InvocationID=7b81da4cd23d4aba991b2ae2d0fddc73
+Result=success
+NRestarts=0
+ExecMainStartTimestamp=@1793997237
+ExecMainExitTimestamp=
+ExecMainStatus=0
+MemoryCurrent=8503296
